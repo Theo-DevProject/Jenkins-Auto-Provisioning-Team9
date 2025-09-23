@@ -1,0 +1,24 @@
+---
+- name: Install MySQL/MariaDB server
+  become: true
+  package:
+    name: "{{ (ansible_os_family == 'Debian') | ternary('mysql-server', 'mariadb-server') }}"
+    state: present
+
+- name: Ensure DB service running
+  become: true
+  service:
+    name: "{{ (ansible_os_family == 'Debian') | ternary('mysql', 'mariadb') }}"
+    state: started
+    enabled: true
+
+- name: Copy init_db.sql
+  become: true
+  copy:
+    src: "{{ playbook_dir }}/../roles/monitoring-script/files/init_db.sql"
+    dest: /tmp/init_db.sql
+    mode: '0644'
+
+- name: Create DB schema
+  become: true
+  shell: "mysql -u root < /tmp/init_db.sql"

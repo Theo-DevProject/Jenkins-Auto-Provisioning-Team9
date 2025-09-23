@@ -1,0 +1,6 @@
+---
+- name: Setup MySQL on DB server
+  hosts: db_server
+  gather_facts: true
+  roles:
+    - mysql-setup

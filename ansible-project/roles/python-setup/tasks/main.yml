@@ -1,0 +1,19 @@
+---
+- name: Ensure Python & pip
+  become: true
+  package:
+    name: "{{ (ansible_os_family == 'Debian') | ternary(['python3','python3-pip'], ['python3','python3-pip']) }}"
+    state: present
+
+- name: Copy requirements
+  become: true
+  copy:
+    src: "{{ playbook_dir }}/../roles/monitoring-script/files/requirements.txt"
+    dest: /tmp/requirements.txt
+    mode: '0644'
+
+- name: Install Python requirements
+  become: true
+  pip:
+    requirements: /tmp/requirements.txt
+    executable: pip3

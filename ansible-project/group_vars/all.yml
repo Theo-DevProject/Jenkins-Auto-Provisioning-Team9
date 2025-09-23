@@ -1,0 +1,4 @@
+mysql_server_ip: <RDS_ENDPOINT>
+db_user: devops
+db_pass: "SuperSecret123!"
+db_name: syslogs
