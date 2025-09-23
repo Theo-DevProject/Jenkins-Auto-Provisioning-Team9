@@ -1,7 +1,0 @@
----
-- name: Deploy Python Monitoring Script
-  hosts: app_servers
-  gather_facts: true
-  roles:
-    - python-setup
-    - monitoring-script
