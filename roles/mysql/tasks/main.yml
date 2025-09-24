@@ -94,7 +94,6 @@
     - ansible_os_family == "RedHat"
     - ansible_distribution != "Amazon"
 
-- name: Ensure root password via socket (Amazon Linux 2023)
   community.mysql.mysql_user:
     name: root
     password: "{{ mysql_root_password }}"
@@ -102,6 +101,23 @@
     state: present
   when: ansible_distribution == "Amazon"
 
+# --- Ensure root password on Amazon Linux 2023 (idempotent) ---
+- block:
+    - name: Ensure root password via socket (first run)
+      community.mysql.mysql_user:
+        name: root
+        password: "{{ mysql_root_password }}"
+        login_unix_socket: "{{ mysql_socket_amzn2023 }}"
+        state: present
+  rescue:
+    - name: Ensure root password via password (re-runs)
+      community.mysql.mysql_user:
+        name: root
+        password: "{{ mysql_root_password }}"
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+        state: present
+  when: ansible_distribution == "Amazon"
 - name: Create application database
   community.mysql.mysql_db:
     name: "{{ db_name }}"
