@@ -1,6 +1,5 @@
 ---
-# --- Install packages per OS ---
-
+# ---- Install packages per OS ----
 - name: Update apt cache (Debian/Ubuntu)
   apt:
     update_cache: yes
@@ -8,116 +7,107 @@
 
 - name: Install MySQL packages (Debian/Ubuntu)
   apt:
-    name: "{{ mysql_pkgs_debian }}"
+    name:
+      - mysql-server
+      - mysql-client
+      - python3-pymysql
     state: present
   when: ansible_os_family == "Debian"
 
-- name: Install MariaDB packages (RedHat family except Amazon 2023)
+# Amazon Linux 2023 uses the 10.5 stream package names
+- name: Install MariaDB packages (Amazon Linux 2023)
   package:
-    name: "{{ mysql_pkgs_redhat }}"
+    name:
+      - mariadb105-server
+      - mariadb105
+      - python3
+      - python3-pip
+    state: present
+  when: ansible_distribution == "Amazon"
+
+# Optional: generic RedHat (not needed for AL2023, but kept for completeness)
+- name: Install MariaDB packages (RedHat family except Amazon)
+  package:
+    name:
+      - mariadb-server
+      - mariadb
     state: present
   when:
     - ansible_os_family == "RedHat"
     - ansible_distribution != "Amazon"
 
-# Amazon Linux 2023 needs different package names
-- name: Install MariaDB packages (Amazon Linux 2023)
-  package:
-    name: "{{ mysql_pkgs_amzn2023 }}"
-    state: present
-  when:
-    - ansible_distribution == "Amazon"
-
-# Ensure PyMySQL (driver for community.mysql) exists on RedHat/Amazon via pip
+# Ensure PyMySQL driver present for MySQL modules on RH/Amazon
 - name: Install PyMySQL via pip when needed
   pip:
     name: PyMySQL
   when: ansible_os_family == "RedHat" or ansible_distribution == "Amazon"
 
-# --- Enable/Start service ---
-
+# ---- Start/Enable service ----
 - name: Ensure MySQL/MariaDB started & enabled
   service:
     name: >-
-      {{ (ansible_distribution == 'Amazon') | ternary(mysql_service_amzn2023,
-         (ansible_os_family == 'Debian') | ternary(mysql_service_debian, mysql_service_redhat)) }}
+      {{ (ansible_distribution == 'Amazon') | ternary('mariadb',
+         (ansible_os_family == 'Debian') | ternary('mysql', 'mariadb')) }}
     state: started
     enabled: yes
 
-# --- Bind 0.0.0.0 ---
-
+# ---- Bind 0.0.0.0 ----
 - name: Drop bind config (Debian/Ubuntu)
   template:
     src: my.cnf.j2
-    dest: "{{ mysql_conf_debian }}"
+    dest: /etc/mysql/conf.d/zz-bind.cnf
   when: ansible_os_family == "Debian"
-  notify: restart mysql
-
-- name: Drop bind config (RedHat non-Amazon)
-  template:
-    src: my.cnf.j2
-    dest: "{{ mysql_conf_redhat }}"
-  when:
-    - ansible_os_family == "RedHat"
-    - ansible_distribution != "Amazon"
   notify: restart mysql
 
 - name: Drop bind config (Amazon Linux 2023)
   template:
     src: my.cnf.j2
-    dest: "{{ mysql_conf_amzn2023 }}"
+    dest: /etc/my.cnf.d/zz-bind.cnf
   when: ansible_distribution == "Amazon"
+  notify: restart mysql
+
+- name: Drop bind config (RedHat non-Amazon)
+  template:
+    src: my.cnf.j2
+    dest: /etc/my.cnf.d/zz-bind.cnf
+  when:
+    - ansible_os_family == "RedHat"
+    - ansible_distribution != "Amazon"
   notify: restart mysql
 
 - name: Wait for port
   wait_for:
-    port: "{{ mysql_listen_port }}"
+    port: 3306
     delay: 3
 
-# --- Secure + DB/User/Table ---
+# ---- Determine socket path per OS ----
+- name: Set socket path fact
+  set_fact:
+    _mysql_socket: >-
+      {{ ansible_os_family == 'Debian'
+         | ternary('/var/run/mysqld/mysqld.sock',
+                   '/var/lib/mysql/mysql.sock') }}
 
-- name: Ensure root password via socket (Debian/Ubuntu)
+# ---- Ensure root password (socket first, then password) ----
+- name: Ensure root password via socket (first run)
   community.mysql.mysql_user:
     name: root
     password: "{{ mysql_root_password }}"
-    login_unix_socket: "{{ mysql_socket_debian }}"
+    login_unix_socket: "{{ _mysql_socket }}"
     state: present
-  when: ansible_os_family == "Debian"
+  ignore_errors: true
+  register: set_root_socket
 
-- name: Ensure root password via socket (RedHat non-Amazon)
+- name: Ensure root password via password (fallback)
   community.mysql.mysql_user:
     name: root
     password: "{{ mysql_root_password }}"
-    login_unix_socket: "{{ mysql_socket_redhat }}"
+    login_user: root
+    login_password: "{{ mysql_root_password }}"
     state: present
-  when:
-    - ansible_os_family == "RedHat"
-    - ansible_distribution != "Amazon"
+  when: set_root_socket is failed
 
-  community.mysql.mysql_user:
-    name: root
-    password: "{{ mysql_root_password }}"
-    login_unix_socket: "{{ mysql_socket_amzn2023 }}"
-    state: present
-  when: ansible_distribution == "Amazon"
-
-# --- Ensure root password on Amazon Linux 2023 (idempotent) ---
-- block:
-    - name: Ensure root password via socket (first run)
-      community.mysql.mysql_user:
-        name: root
-        password: "{{ mysql_root_password }}"
-        login_unix_socket: "{{ mysql_socket_amzn2023 }}"
-        state: present
-  rescue:
-    - name: Ensure root password via password (re-runs)
-      community.mysql.mysql_user:
-        name: root
-        password: "{{ mysql_root_password }}"
-        login_user: root
-        login_password: "{{ mysql_root_password }}"
-        state: present
-  when: ansible_distribution == "Amazon"
+# ---- DB / user / table ----
 - name: Create application database
   community.mysql.mysql_db:
     name: "{{ db_name }}"
