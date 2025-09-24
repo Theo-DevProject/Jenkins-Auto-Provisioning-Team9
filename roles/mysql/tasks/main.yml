@@ -1,5 +1,6 @@
 ---
-# --- Packages & service install ---
+# --- Install packages per OS ---
+
 - name: Update apt cache (Debian/Ubuntu)
   apt:
     update_cache: yes
@@ -11,19 +12,40 @@
     state: present
   when: ansible_os_family == "Debian"
 
-- name: Install MariaDB packages (RedHat/Amazon Linux)
+- name: Install MariaDB packages (RedHat family except Amazon 2023)
   package:
     name: "{{ mysql_pkgs_redhat }}"
     state: present
-  when: ansible_os_family == "RedHat"
+  when:
+    - ansible_os_family == "RedHat"
+    - ansible_distribution != "Amazon"
+
+# Amazon Linux 2023 needs different package names
+- name: Install MariaDB packages (Amazon Linux 2023)
+  package:
+    name: "{{ mysql_pkgs_amzn2023 }}"
+    state: present
+  when:
+    - ansible_distribution == "Amazon"
+
+# Ensure PyMySQL (driver for community.mysql) exists on RedHat/Amazon via pip
+- name: Install PyMySQL via pip when needed
+  pip:
+    name: PyMySQL
+  when: ansible_os_family == "RedHat" or ansible_distribution == "Amazon"
+
+# --- Enable/Start service ---
 
 - name: Ensure MySQL/MariaDB started & enabled
   service:
-    name: "{{ (ansible_os_family == 'Debian') | ternary(mysql_service_debian, mysql_service_redhat) }}"
+    name: >-
+      {{ (ansible_distribution == 'Amazon') | ternary(mysql_service_amzn2023,
+         (ansible_os_family == 'Debian') | ternary(mysql_service_debian, mysql_service_redhat)) }}
     state: started
     enabled: yes
 
-# --- Bind on 0.0.0.0 ---
+# --- Bind 0.0.0.0 ---
+
 - name: Drop bind config (Debian/Ubuntu)
   template:
     src: my.cnf.j2
@@ -31,11 +53,20 @@
   when: ansible_os_family == "Debian"
   notify: restart mysql
 
-- name: Drop bind config (RedHat/Amazon Linux)
+- name: Drop bind config (RedHat non-Amazon)
   template:
     src: my.cnf.j2
     dest: "{{ mysql_conf_redhat }}"
-  when: ansible_os_family == "RedHat"
+  when:
+    - ansible_os_family == "RedHat"
+    - ansible_distribution != "Amazon"
+  notify: restart mysql
+
+- name: Drop bind config (Amazon Linux 2023)
+  template:
+    src: my.cnf.j2
+    dest: "{{ mysql_conf_amzn2023 }}"
+  when: ansible_distribution == "Amazon"
   notify: restart mysql
 
 - name: Wait for port
@@ -44,6 +75,7 @@
     delay: 3
 
 # --- Secure + DB/User/Table ---
+
 - name: Ensure root password via socket (Debian/Ubuntu)
   community.mysql.mysql_user:
     name: root
@@ -52,13 +84,23 @@
     state: present
   when: ansible_os_family == "Debian"
 
-- name: Ensure root password via socket (RedHat/Amazon Linux)
+- name: Ensure root password via socket (RedHat non-Amazon)
   community.mysql.mysql_user:
     name: root
     password: "{{ mysql_root_password }}"
     login_unix_socket: "{{ mysql_socket_redhat }}"
     state: present
-  when: ansible_os_family == "RedHat"
+  when:
+    - ansible_os_family == "RedHat"
+    - ansible_distribution != "Amazon"
+
+- name: Ensure root password via socket (Amazon Linux 2023)
+  community.mysql.mysql_user:
+    name: root
+    password: "{{ mysql_root_password }}"
+    login_unix_socket: "{{ mysql_socket_amzn2023 }}"
+    state: present
+  when: ansible_distribution == "Amazon"
 
 - name: Create application database
   community.mysql.mysql_db:
