@@ -60,36 +60,26 @@ pipeline {
       }
     }
 
-stage('Smoke test: SQL console up') {
+ stage('Smoke test: SQL console up') {
   steps {
     sh '''
       set -e
-
       URLS="http://172.31.16.135:8082 http://54.210.34.76:8082"
       echo "Probing: $URLS"
 
-      # Disable proxies for this step
-      export http_proxy= HTTPS_PROXY= HTTP_PROXY= https_proxy=
-      export no_proxy='*' NO_PROXY='*'
+      # Disable proxies just for this step
+      export http_proxy=
+      export https_proxy=
+      export HTTP_PROXY=
+      export HTTPS_PROXY=
+      export no_proxy=*
+      export NO_PROXY=*
 
       for url in $URLS; do
         echo "Probing ${url} ..."
-
-        host_port=${url#http://}
-        host=${host_port%:*}
-        port=${host_port##*:}
-
-        # 1) Raw TCP probe (fast, no HTTP involved)
-        if timeout 5 bash -lc ":</dev/tcp/$host/$port"; then
-          echo "TCP ${host}:${port} is reachable"
-        else
-          echo "TCP ${host}:${port} is NOT reachable (timeout)"
-        fi
-
-        # 2) HTTP probe with proxies forcibly disabled
         for i in $(seq 1 30); do
           code=$(curl -sS -o /dev/null --connect-timeout 3 --max-time 5 \
-                     --noproxy '*' --proxy '' -w '%{http_code}' "$url" || true)
+                    --noproxy '*' -x '' -w '%{http_code}' "$url" || true)
           echo "Attempt $i -> ${url} returned HTTP ${code}"
           [ "$code" = "200" ] && { echo "SQL console is up on ${url}"; exit 0; }
           sleep 2
