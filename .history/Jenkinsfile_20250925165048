@@ -1,0 +1,74 @@
+pipeline {
+  agent any
+
+  options { timestamps() }
+
+  environment {
+    INVENTORY = "inventory.ini"
+    PLAYBOOK  = "deploy-complete-system.yml"
+    // DB vars available to snapshot.py; override here if needed
+    DB_HOST   = "172.31.25.138"
+    DB_USER   = "devops"
+    DB_PASS   = "DevOpsPass456"
+    DB_NAME   = "syslogs"
+  }
+
+  stages {
+    stage('Checkout') {
+      steps { checkout scm }
+    }
+
+    stage('Install Ansible deps (idempotent)') {
+      steps {
+        sh '''
+          set -e
+          if ! command -v ansible >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo apt-get install -y ansible python3-pip
+          fi
+          ansible-galaxy collection install community.mysql community.general --force
+        '''
+      }
+    }
+
+    stage('Deploy with Ansible') {
+      steps {
+        withCredentials([sshUserPrivateKey(credentialsId: 'devops-ssh',
+                                           keyFileVariable: 'SSH_KEY',
+                                           usernameVariable: 'SSH_USER')]) {
+          sh '''
+            set -e
+            mkdir -p logs
+            : > logs/ansible.log
+
+            export ANSIBLE_HOST_KEY_CHECKING=false
+            ansible --version
+
+            ansible-playbook "${PLAYBOOK}" -i "${INVENTORY}" \
+              -e ansible_ssh_private_key_file="$SSH_KEY"
+
+            cp logs/ansible.log "logs/ansible-${BUILD_NUMBER}.log"
+          '''
+        }
+      }
+    }
+
+    stage('Snapshot DB (CSV + PNG)') {
+      steps {
+        sh '''
+          set -e
+          mkdir -p artifacts
+          python3 -m pip install --user PyMySQL matplotlib >/dev/null 2>&1 || true
+          DB_HOST="${DB_HOST}" DB_USER="${DB_USER}" DB_PASS="${DB_PASS}" DB_NAME="${DB_NAME}" \
+            python3 tools/snapshot.py
+        '''
+      }
+    }
+  }
+
+  post {
+    always {
+      archiveArtifacts artifacts: 'logs/ansible-*.log, artifacts/*.csv, artifacts/*.png', allowEmptyArchive: true
+    }
+  }
+}
