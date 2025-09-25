@@ -1,0 +1,104 @@
+pipeline {
+  agent any
+
+  options { timestamps() }
+
+  environment {
+    INVENTORY = "inventory.ini"
+    PLAYBOOK  = "deploy-complete-system.yml"
+  }
+
+  stages {
+    stage('Checkout') {
+      steps { checkout scm }
+    }
+
+    stage('Install Ansible deps (idempotent)') {
+      steps {
+        sh '''
+          set -e
+          if ! command -v ansible >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo apt-get install -y ansible python3-pip
+          fi
+          ansible-galaxy collection install community.mysql community.general --force
+        '''
+      }
+    }
+
+    stage('Deploy with Ansible') {
+      steps {
+        withCredentials([sshUserPrivateKey(credentialsId: 'devops-ssh',
+                                           keyFileVariable: 'SSH_KEY',
+                                           usernameVariable: 'SSH_USER')]) {
+          sh '''
+            set -e
+            mkdir -p logs artifacts
+            : > logs/ansible.log
+
+            export ANSIBLE_HOST_KEY_CHECKING=false
+            ansible --version
+
+            ansible-playbook "${PLAYBOOK}" -i "${INVENTORY}" \
+              -e ansible_ssh_private_key_file="$SSH_KEY"
+
+            cp logs/ansible.log "logs/ansible-${BUILD_NUMBER}.log"
+          '''
+        }
+      }
+    }
+
+    stage('Smoke test (DB snapshot)') {
+      steps {
+        withCredentials([sshUserPrivateKey(credentialsId: 'devops-ssh',
+                                           keyFileVariable: 'SSH_KEY',
+                                           usernameVariable: 'SSH_USER')]) {
+          sh '''
+            set -e
+            # create a tiny ad-hoc play that runs the query ON the DB host
+            cat > smoke.yml <<'YAML'
+            ---
+            - hosts: mysql_servers
+              gather_facts: no
+              vars:
+                q: >
+                  SELECT DATE_FORMAT(timestamp,'%Y-%m-%d %H:%i:%s') AS ts,
+                         cpu_usage, memory_usage
+                  FROM stats
+                  ORDER BY timestamp DESC
+                  LIMIT 20;
+              tasks:
+                - name: Query recent stats with mysql CLI (simple & robust)
+                  shell: >
+                    mysql -N -u {{ db_user }} -p{{ db_password }}
+                    -D {{ db_name }} -e "{{ q }}"
+                  register: sm
+
+                - name: Build CSV text locally
+                  set_fact:
+                    csv_text: |-
+                      ts,cpu_usage,memory_usage
+                      {{ sm.stdout_lines | join('\\n') }}
+
+                - name: Write CSV to Jenkins workspace
+                  copy:
+                    dest: "{{ lookup('env','WORKSPACE') }}/artifacts/stats_snapshot.csv"
+                    content: "{{ csv_text }}"
+                  delegate_to: localhost
+                  run_once: true
+            YAML
+
+            ansible-playbook smoke.yml -i "${INVENTORY}" \
+              -e ansible_ssh_private_key_file="$SSH_KEY"
+          '''
+        }
+      }
+    }
+  }
+
+  post {
+    always {
+      archiveArtifacts artifacts: 'logs/ansible-*.log, artifacts/*.csv', allowEmptyArchive: true
+    }
+  }
+}
