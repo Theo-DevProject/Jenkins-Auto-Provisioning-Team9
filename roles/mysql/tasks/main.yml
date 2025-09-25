@@ -1,0 +1,140 @@
+---
+# ---- Install packages per OS ----
+- name: Update apt cache (Debian/Ubuntu)
+  apt:
+    update_cache: yes
+  when: ansible_os_family == "Debian"
+
+- name: Install MySQL packages (Debian/Ubuntu)
+  apt:
+    name:
+      - mysql-server
+      - mysql-client
+      - python3-pymysql
+    state: present
+  when: ansible_os_family == "Debian"
+
+# Amazon Linux 2023 uses the 10.5 stream package names
+- name: Install MariaDB packages (Amazon Linux 2023)
+  package:
+    name:
+      - mariadb105-server
+      - mariadb105
+      - python3
+      - python3-pip
+    state: present
+  when: ansible_distribution == "Amazon"
+
+# Optional: generic RedHat (not needed for AL2023, but kept for completeness)
+- name: Install MariaDB packages (RedHat family except Amazon)
+  package:
+    name:
+      - mariadb-server
+      - mariadb
+    state: present
+  when:
+    - ansible_os_family == "RedHat"
+    - ansible_distribution != "Amazon"
+
+# Ensure PyMySQL driver present for MySQL modules on RH/Amazon
+- name: Install PyMySQL via pip when needed
+  pip:
+    name: PyMySQL
+  when: ansible_os_family == "RedHat" or ansible_distribution == "Amazon"
+
+# ---- Start/Enable service ----
+- name: Ensure MySQL/MariaDB started & enabled
+  service:
+    name: >-
+      {{ (ansible_distribution == 'Amazon') | ternary('mariadb',
+         (ansible_os_family == 'Debian') | ternary('mysql', 'mariadb')) }}
+    state: started
+    enabled: yes
+
+# ---- Bind 0.0.0.0 ----
+- name: Drop bind config (Debian/Ubuntu)
+  template:
+    src: my.cnf.j2
+    dest: /etc/mysql/conf.d/zz-bind.cnf
+  when: ansible_os_family == "Debian"
+  notify: restart mysql
+
+- name: Drop bind config (Amazon Linux 2023)
+  template:
+    src: my.cnf.j2
+    dest: /etc/my.cnf.d/zz-bind.cnf
+  when: ansible_distribution == "Amazon"
+  notify: restart mysql
+
+- name: Drop bind config (RedHat non-Amazon)
+  template:
+    src: my.cnf.j2
+    dest: /etc/my.cnf.d/zz-bind.cnf
+  when:
+    - ansible_os_family == "RedHat"
+    - ansible_distribution != "Amazon"
+  notify: restart mysql
+
+- name: Wait for port
+  wait_for:
+    port: 3306
+    delay: 3
+
+# ---- Determine socket path per OS ----
+- name: Set socket path fact
+  set_fact:
+    _mysql_socket: >-
+      {{ ansible_os_family == 'Debian'
+         | ternary('/var/run/mysqld/mysqld.sock',
+                   '/var/lib/mysql/mysql.sock') }}
+
+# ---- Ensure root password (socket first, then password) ----
+- name: Ensure root password via socket (first run)
+  community.mysql.mysql_user:
+    name: root
+    password: "{{ mysql_root_password }}"
+    login_unix_socket: "{{ _mysql_socket }}"
+    state: present
+  ignore_errors: true
+  register: set_root_socket
+
+- name: Ensure root password via password (fallback)
+  community.mysql.mysql_user:
+    name: root
+    password: "{{ mysql_root_password }}"
+    login_user: root
+    login_password: "{{ mysql_root_password }}"
+    state: present
+  when: set_root_socket is failed
+
+# ---- DB / user / table ----
+- name: Create application database
+  community.mysql.mysql_db:
+    name: "{{ db_name }}"
+    state: present
+    login_user: root
+    login_password: "{{ mysql_root_password }}"
+
+- name: Create application user (allow remote)
+  community.mysql.mysql_user:
+    name: "{{ db_user }}"
+    host: '%'
+    password: "{{ db_password }}"
+    priv: "{{ db_name }}.*:ALL"
+    state: present
+    login_user: root
+    login_password: "{{ mysql_root_password }}"
+
+- name: Create stats table
+  community.mysql.mysql_query:
+    login_user: root
+    login_password: "{{ mysql_root_password }}"
+    login_db: "{{ db_name }}"
+    query: |
+      CREATE TABLE IF NOT EXISTS stats (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        timestamp DATETIME,
+        cpu_usage FLOAT,
+        memory_usage FLOAT,
+        INDEX idx_timestamp (timestamp)
+      );

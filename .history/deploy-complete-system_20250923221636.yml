@@ -1,0 +1,23 @@
+---
+- name: Deploy MySQL Database
+  hosts: mysql_servers
+  become: yes
+  vars:
+    mysql_host: "{{ ansible_default_ipv4.address }}"
+  roles:
+    - mysql
+
+- name: Deploy Jenkins Master
+  hosts: jenkins_master
+  become: yes
+  roles:
+    - jenkins
+
+- name: Deploy Python Application
+  hosts: app_servers
+  become: yes
+  vars:
+    # Use inventory IP of the first mysql host (works even with --limit app_servers)
+    mysql_host: "{{ hostvars[groups['mysql_servers'][0]].ansible_host }}"
+  roles:
+    - python_app

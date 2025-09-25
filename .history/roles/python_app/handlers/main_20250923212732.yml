@@ -1,0 +1,6 @@
+---
+- name: restart system-monitor
+  systemd:
+    name: system-monitor.timer
+    state: restarted
+    daemon_reload: yes

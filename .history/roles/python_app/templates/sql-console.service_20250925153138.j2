@@ -1,0 +1,19 @@
+[Unit]
+Description=SQL Console (Flask)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/system-monitor
+EnvironmentFile=/opt/system-monitor/.env
+Environment=PYTHONUNBUFFERED=1
+# optional harden: run as ec2-user
+# User=ec2-user
+ExecStart=/opt/system-monitor/venv/bin/python -m flask run --host=0.0.0.0 --port=8082 --app sql_console:app
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

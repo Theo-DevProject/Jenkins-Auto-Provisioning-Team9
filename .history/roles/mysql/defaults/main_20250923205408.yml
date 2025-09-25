@@ -1,0 +1,25 @@
+mysql_root_password: "SecureRootPass123"
+db_name: "syslogs"
+db_user: "devops"
+db_password: "DevOpsPass456"
+
+mysql_bind_address: "0.0.0.0"
+mysql_listen_port: 3306
+
+# Debian/Ubuntu
+mysql_pkgs_debian:
+  - mysql-server
+  - mysql-client
+  - python3-pymysql
+mysql_service_debian: mysql
+mysql_socket_debian: /var/run/mysqld/mysqld.sock
+mysql_conf_debian: /etc/mysql/conf.d/zz-bind.cnf
+
+# RedHat / Amazon Linux (AL2023)
+mysql_pkgs_redhat:
+  - mariadb-server
+  - mariadb
+  - python3-PyMySQL
+mysql_service_redhat: mariadb
+mysql_socket_redhat: /var/lib/mysql/mysql.sock
+mysql_conf_redhat: /etc/my.cnf.d/zz-bind.cnf

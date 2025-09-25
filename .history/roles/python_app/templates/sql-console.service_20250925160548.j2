@@ -1,0 +1,18 @@
+[Unit]
+Description=SQL Console (Flask)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/system-monitor
+EnvironmentFile=/opt/system-monitor/.env
+Environment=PYTHONUNBUFFERED=1
+# Start Flask app straight from the module to ensure it blocks and serves
+ExecStart=/opt/system-monitor/venv/bin/python -u -c "from sql_console import app; app.run(host='0.0.0.0', port=8082)"
+Restart=always
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
