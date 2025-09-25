@@ -1,0 +1,16 @@
+---
+- name: Daemon reload
+  ansible.builtin.systemd:
+    daemon_reload: yes
+
+- name: Enable & start system-monitor timer
+  ansible.builtin.systemd:
+    name: system-monitor.timer
+    enabled: true
+    state: started
+
+- name: Enable & start sql-console
+  ansible.builtin.systemd:
+    name: sql-console.service
+    enabled: true
+    state: started

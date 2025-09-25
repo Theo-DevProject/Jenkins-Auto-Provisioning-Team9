@@ -1,0 +1,25 @@
+---
+- name: Deploy MySQL Database
+  hosts: mysql_servers
+  become: yes
+  vars:
+    mysql_host: "{{ ansible_default_ipv4.address }}"
+  roles:
+    - mysql
+
+- name: Deploy Jenkins Master
+  hosts: jenkins_master
+  become: yes
+  roles:
+    - jenkins
+
+- name: Deploy Python Application
+  hosts: app_servers
+  become: yes
+  vars:
+    mysql_host: "{{ hostvars[groups['mysql_servers'][0]]['ansible_default_ipv4']['address'] }}"
+    db_name: "{{ db_name }}"
+    db_user: "{{ db_user }}"
+    db_password: "{{ db_password }}"
+  roles:
+    - python_app

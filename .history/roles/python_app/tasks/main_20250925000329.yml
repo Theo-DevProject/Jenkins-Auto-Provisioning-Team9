@@ -1,0 +1,116 @@
+---
+- name: Ensure Python + tools (Debian/Ubuntu)
+  apt:
+    name:
+      - python3
+      - python3-venv
+      - python3-pip
+    state: present
+    update_cache: yes
+  when: ansible_os_family == "Debian"
+
+- name: Ensure Python + tools (RedHat/Amazon)
+  yum:
+    name:
+      - python3
+      - python3-pip
+    state: present
+  when: ansible_os_family in ["RedHat", "Amazon"]
+
+- name: Create application directory
+  file:
+    path: /opt/system-monitor
+    state: directory
+    mode: "0755"
+
+- name: Copy Python script (metrics agent)
+  copy:
+    src: log_stats.py
+    dest: /opt/system-monitor/log_stats.py
+    mode: "0755"
+
+- name: Copy requirements file
+  copy:
+    src: requirements.txt
+    dest: /opt/system-monitor/requirements.txt
+    mode: "0644"
+
+- name: Create Python virtual environment & install deps
+  shell: |
+    set -e
+    test -d /opt/system-monitor/venv || python3 -m venv /opt/system-monitor/venv
+    /opt/system-monitor/venv/bin/pip install --upgrade pip
+    /opt/system-monitor/venv/bin/pip install -r /opt/system-monitor/requirements.txt
+  args:
+    creates: /opt/system-monitor/venv/bin/activate
+
+- name: Create environment file
+  copy:
+    dest: /opt/system-monitor/.env
+    mode: "0644"
+    content: |
+      DB_HOST={{ mysql_host }}
+      DB_USER={{ db_user }}
+      DB_PASS={{ db_password }}
+      DB_NAME={{ db_name }}
+
+# --- system-monitor as a service + timer (existing) ---
+- name: Create systemd service file
+  copy:
+    dest: /etc/systemd/system/system-monitor.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=System Monitor Service
+      After=network.target
+
+      [Service]
+      Type=oneshot
+      EnvironmentFile=/opt/system-monitor/.env
+      ExecStart=/opt/system-monitor/venv/bin/python /opt/system-monitor/log_stats.py
+
+      [Install]
+      WantedBy=multi-user.target
+  notify: Daemon reload
+
+- name: Create systemd timer file
+  copy:
+    dest: /etc/systemd/system/system-monitor.timer
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Run system-monitor every 5 minutes
+
+      [Timer]
+      OnBootSec=30s
+      OnUnitActiveSec=5min
+      Unit=system-monitor.service
+
+      [Install]
+      WantedBy=timers.target
+  notify:
+    - Daemon reload
+    - Enable & start system-monitor timer
+
+# --- SQL console deployment ---
+- name: Copy sql_console.py
+  copy:
+    src: sql_console.py
+    dest: /opt/system-monitor/sql_console.py
+    mode: "0755"
+
+- name: Install Flask + PyMySQL in venv (for console)
+  shell: |
+    set -e
+    /opt/system-monitor/venv/bin/pip install Flask PyMySQL
+  args:
+    creates: /opt/system-monitor/venv/bin/flask
+
+- name: Install systemd unit for SQL console
+  template:
+    src: sql-console.service.j2
+    dest: /etc/systemd/system/sql-console.service
+    mode: "0644"
+  notify:
+    - Daemon reload
+    - Enable & start sql-console

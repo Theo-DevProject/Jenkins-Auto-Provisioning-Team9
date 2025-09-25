@@ -1,0 +1,128 @@
+pipeline {
+  agent any
+
+  options { timestamps() }
+
+  environment {
+    INVENTORY = "inventory.ini"
+    PLAYBOOK  = "deploy-complete-system.yml"
+
+    // --- SQL console endpoint (public or private) ---
+    APP_URL   = "http://54.210.34.76:8082"
+
+    // --- DB connection for the snapshot script ---
+    DB_HOST = "172.31.25.138"
+    DB_USER = "devops"
+    DB_PASS = "DevOpsPass456"
+    DB_NAME = "syslogs"
+
+    // how many recent rows to pull for the CSV/PNG
+    POINTS = "120"
+  }
+
+  stages {
+    stage('Checkout') {
+      steps { checkout scm }
+    }
+
+    stage('Install Ansible deps (idempotent)') {
+      steps {
+        sh '''
+          set -e
+          if ! command -v ansible >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo apt-get install -y ansible python3-pip
+          fi
+          ansible-galaxy collection install community.mysql community.general --force
+        '''
+      }
+    }
+
+    stage('Deploy with Ansible') {
+      steps {
+        withCredentials([sshUserPrivateKey(credentialsId: 'devops-ssh',
+                                          keyFileVariable: 'SSH_KEY',
+                                          usernameVariable: 'SSH_USER')]) {
+          sh '''
+            set -e
+            mkdir -p logs
+            : > logs/ansible.log
+
+            export ANSIBLE_HOST_KEY_CHECKING=false
+            ansible --version
+
+            ansible-playbook "${PLAYBOOK}" -i "${INVENTORY}" \
+              -e ansible_ssh_private_key_file="$SSH_KEY" | tee -a logs/ansible.log
+
+            cp logs/ansible.log "logs/ansible-${BUILD_NUMBER}.log"
+          '''
+        }
+      }
+    }
+
+stage('Smoke test: SQL console up') {
+  steps {
+    sh '''
+  set -euo pipefail
+  URLS="http://172.31.16.135:8082 http://54.210.34.76:8082"
+  echo "Probing: $URLS"
+
+  # force no proxies
+  export http_proxy= HTTPS_PROXY= HTTP_PROXY= https_proxy=
+  export no_proxy='*' NO_PROXY='*'
+
+  for url in $URLS; do
+    echo "Probing ${url} ..."
+    host_port=${url#http://}; host=${host_port%:*}; port=${host_port##*:}
+
+    # raw TCP check
+    if timeout 5 bash -lc ":</dev/tcp/$host/$port"; then
+      echo "TCP $host:$port is reachable"
+    else
+      echo "TCP $host:$port is NOT reachable (timeout)"
+    fi
+
+    # HTTP check
+    for i in $(seq 1 10); do
+      code=$(curl -sS -o /dev/null --connect-timeout 3 --max-time 5 \
+                 --noproxy '*' --proxy '' -w '%{http_code}' "$url" || true)
+      echo "Attempt $i -> $url returned HTTP $code"
+      [ "$code" = "200" ] && { echo "OK on $url"; exit 0; }
+      sleep 2
+    done
+  done
+
+  echo "ERROR: SQL console not reachable from Jenkins"
+  exit 1
+'''
+  }
+}
+
+    stage('Snapshot metrics (CSV + PNG)') {
+      steps {
+        sh '''
+          set -e
+          python3 -m venv .venv
+          . .venv/bin/activate
+          pip install --upgrade pip
+          pip install pymysql matplotlib
+
+          rm -rf artifacts && mkdir -p artifacts
+          DB_HOST="${DB_HOST}" DB_USER="${DB_USER}" DB_PASS="${DB_PASS}" \
+          DB_NAME="${DB_NAME}" POINTS="${POINTS}" \
+          .venv/bin/python tools/snapshot.py
+
+          # make a copy stamped with the build number
+          cp artifacts/stats_snapshot.csv "artifacts/stats_snapshot_${BUILD_NUMBER}.csv" || true
+          cp artifacts/stats_last_hour.png "artifacts/stats_last_${BUILD_NUMBER}.png" || true
+        '''
+      }
+    }
+  }
+
+  post {
+    always {
+      archiveArtifacts artifacts: 'logs/ansible-*.log, artifacts/**', allowEmptyArchive: true
+    }
+  }
+}

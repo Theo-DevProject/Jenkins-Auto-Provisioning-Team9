@@ -1,0 +1,63 @@
+pipeline {
+  agent any
+
+  options {
+    timestamps()
+  }
+
+  environment {
+    INVENTORY = "inventory.ini"
+    PLAYBOOK  = "deploy-complete-system.yml"
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        checkout scm
+      }
+    }
+
+    stage('Install Ansible deps (idempotent)') {
+      steps {
+        sh '''
+          set -e
+          if ! command -v ansible >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo apt-get install -y ansible python3-pip
+          fi
+          ansible-galaxy collection install community.mysql community.general --force
+        '''
+      }
+    }
+
+stage('Deploy with Ansible') {
+  steps {
+    withCredentials([sshUserPrivateKey(credentialsId: 'devops-ssh',
+                                       keyFileVariable: 'SSH_KEY',
+                                       usernameVariable: 'SSH_USER')]) {
+      sh '''
+        set -e
+        mkdir -p logs
+        # start with a fresh file to avoid appending across builds
+        : > logs/ansible.log
+
+        export ANSIBLE_HOST_KEY_CHECKING=false
+        ansible --version
+
+        ansible-playbook "${PLAYBOOK}" -i "${INVENTORY}" \
+          -e ansible_ssh_private_key_file="$SSH_KEY"
+
+        # keep a per-build copy for archiving/history
+        cp logs/ansible.log "logs/ansible-${BUILD_NUMBER}.log"
+      '''
+    }
+  }
+}
+
+post {
+  always {
+    archiveArtifacts artifacts: 'logs/ansible-*.log', allowEmptyArchive: true
+  }
+}
+}
+}

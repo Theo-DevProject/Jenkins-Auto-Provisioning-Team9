@@ -1,0 +1,64 @@
+---
+# Install Python runtime & tools per OS
+- name: Ensure Python + tools (Debian/Ubuntu)
+  apt:
+    name:
+      - python3
+      - python3-pip
+      - python3-venv
+    state: present
+    update_cache: yes
+  when: ansible_os_family == "Debian"
+
+- name: Ensure Python + tools (RedHat/Amazon)
+  package:
+    name:
+      - python3
+      - python3-pip
+  when: ansible_os_family == "RedHat" or ansible_distribution == "Amazon"
+
+- name: Create application directory
+  file:
+    path: /opt/system-monitor
+    state: directory
+    mode: '0755'
+
+- name: Copy Python script
+  copy:
+    src: log_stats.py
+    dest: /opt/system-monitor/log_stats.py
+    mode: '0755'
+
+- name: Copy requirements file
+  copy:
+    src: requirements.txt
+    dest: /opt/system-monitor/requirements.txt
+
+- name: Create Python virtual environment & install deps
+  pip:
+    requirements: /opt/system-monitor/requirements.txt
+    virtualenv: /opt/system-monitor/venv
+    virtualenv_command: python3 -m venv
+
+- name: Create environment file
+  template:
+    src: env_vars.j2
+    dest: /opt/system-monitor/.env
+    mode: '0600'
+
+- name: Create systemd service file
+  template:
+    src: system-monitor.service.j2
+    dest: /etc/systemd/system/system-monitor.service
+
+- name: Create systemd timer file
+  template:
+    src: system-monitor.timer.j2
+    dest: /etc/systemd/system/system-monitor.timer
+
+- name: Enable and start systemd timer
+  systemd:
+    name: system-monitor.timer
+    enabled: yes
+    state: started
+    daemon_reload: yes

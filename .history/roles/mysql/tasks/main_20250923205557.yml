@@ -1,0 +1,92 @@
+---
+# --- Packages & service install ---
+- name: Update apt cache (Debian/Ubuntu)
+  apt:
+    update_cache: yes
+  when: ansible_os_family == "Debian"
+
+- name: Install MySQL packages (Debian/Ubuntu)
+  apt:
+    name: "{{ mysql_pkgs_debian }}"
+    state: present
+  when: ansible_os_family == "Debian"
+
+- name: Install MariaDB packages (RedHat/Amazon Linux)
+  package:
+    name: "{{ mysql_pkgs_redhat }}"
+    state: present
+  when: ansible_os_family == "RedHat"
+
+- name: Ensure MySQL/MariaDB started & enabled
+  service:
+    name: "{{ (ansible_os_family == 'Debian') | ternary(mysql_service_debian, mysql_service_redhat) }}"
+    state: started
+    enabled: yes
+
+# --- Bind on 0.0.0.0 ---
+- name: Drop bind config (Debian/Ubuntu)
+  template:
+    src: my.cnf.j2
+    dest: "{{ mysql_conf_debian }}"
+  when: ansible_os_family == "Debian"
+  notify: restart mysql
+
+- name: Drop bind config (RedHat/Amazon Linux)
+  template:
+    src: my.cnf.j2
+    dest: "{{ mysql_conf_redhat }}"
+  when: ansible_os_family == "RedHat"
+  notify: restart mysql
+
+- name: Wait for port
+  wait_for:
+    port: "{{ mysql_listen_port }}"
+    delay: 3
+
+# --- Secure + DB/User/Table ---
+- name: Ensure root password via socket (Debian/Ubuntu)
+  community.mysql.mysql_user:
+    name: root
+    password: "{{ mysql_root_password }}"
+    login_unix_socket: "{{ mysql_socket_debian }}"
+    state: present
+  when: ansible_os_family == "Debian"
+
+- name: Ensure root password via socket (RedHat/Amazon Linux)
+  community.mysql.mysql_user:
+    name: root
+    password: "{{ mysql_root_password }}"
+    login_unix_socket: "{{ mysql_socket_redhat }}"
+    state: present
+  when: ansible_os_family == "RedHat"
+
+- name: Create application database
+  community.mysql.mysql_db:
+    name: "{{ db_name }}"
+    state: present
+    login_user: root
+    login_password: "{{ mysql_root_password }}"
+
+- name: Create application user (allow remote)
+  community.mysql.mysql_user:
+    name: "{{ db_user }}"
+    host: '%'
+    password: "{{ db_password }}"
+    priv: "{{ db_name }}.*:ALL"
+    state: present
+    login_user: root
+    login_password: "{{ mysql_root_password }}"
+
+- name: Create stats table
+  community.mysql.mysql_query:
+    login_user: root
+    login_password: "{{ mysql_root_password }}"
+    login_db: "{{ db_name }}"
+    query: |
+      CREATE TABLE IF NOT EXISTS stats (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        timestamp DATETIME,
+        cpu_usage FLOAT,
+        memory_usage FLOAT,
+        INDEX idx_timestamp (timestamp)
+      );
