@@ -1,3 +1,2 @@
+psutil==5.9.0
 mysql-connector-python==8.0.32
-psutil
-PyMySQL
