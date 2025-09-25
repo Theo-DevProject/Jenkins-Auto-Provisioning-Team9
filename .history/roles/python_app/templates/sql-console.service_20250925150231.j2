@@ -6,10 +6,9 @@ After=network.target
 Type=simple
 WorkingDirectory=/opt/system-monitor
 EnvironmentFile=/opt/system-monitor/.env
-Environment=PYTHONUNBUFFERED=1
-# optional harden: run as ec2-user
+# (optional) run as ec2-user instead of root:
 # User=ec2-user
-ExecStart=/opt/system-monitor/venv/bin/python -m flask run --host=0.0.0.0 --port=8082 --app sql_console:app
+ExecStart=/opt/system-monitor/venv/bin/python /opt/system-monitor/sql_console.py
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
