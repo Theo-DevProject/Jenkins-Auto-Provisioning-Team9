@@ -3,15 +3,15 @@ pipeline {
   options { timestamps() }
 
   environment {
-    // ===== Ansible =====
+    // ===== Ansible / App deploy =====
     INVENTORY   = "inventory.ini"
     PLAYBOOK    = "deploy-complete-system.yml"
 
-    // ===== App endpoints for smoke test =====
+    // App endpoints for smoke test
     APP_PUBLIC  = "http://3.223.42.1:8082"        // app-server Elastic IP
     APP_PRIVATE = "http://172.31.16.135:8082"     // app-server private
 
-    // ===== DB connection (private IP) =====
+    // DB connection (use DB private IP)
     DB_HOST = "172.31.25.138"
     DB_USER = "devops"
     DB_PASS = "DevOpsPass456"
@@ -20,32 +20,15 @@ pipeline {
     POINTS = "120"  // rows for snapshot
 
     // ===== SonarQube =====
-    SONAR_HOST_URL    = "http://18.232.39.51:9000"  // your SonarQube URL
-    SONAR_PROJECT_KEY = "team9-syslogs"             // must match sonar-project.properties
-    // Sonar caches/work dir (kept inside workspace to avoid root perms)
-    SONAR_USER_HOME   = "${WORKSPACE}/.sonar"
-    SONAR_WORK_DIR    = "${WORKSPACE}/.scannerwork"
+    SONAR_HOST_URL    = "http://18.232.39.51:9000" // your SonarQube URL
+    SONAR_PROJECT_KEY = "team9-syslogs"            // must match sonar-project.properties
+    SONAR_USER_HOME   = "${WORKSPACE}/.sonar"      // scanner cache in workspace
+    SONAR_WORK_DIR    = "${WORKSPACE}/.scannerwork"// scanner working dir
   }
 
   stages {
-
     stage('Checkout') {
       steps { checkout scm }
-    }
-
-    stage('Pre-flight: free space') {
-      steps {
-        sh '''
-          set -e
-          echo "Checking free space..."
-          df -h
-          # abort if less than ~1GB free on /
-          FREE=$(df --output=avail -k / | tail -1)
-          if [ "$FREE" -lt 1048576 ]; then
-            echo "ERROR: Less than 1GB free on root filesystem."; exit 1
-          fi
-        '''
-      }
     }
 
     stage('Install Ansible deps (idempotent)') {
@@ -55,7 +38,7 @@ pipeline {
           if ! command -v ansible >/dev/null 2>&1; then
             if command -v apt-get >/dev/null 2>&1; then
               sudo apt-get update -y
-              sudo apt-get install -y ansible python3-pip
+              sudo apt-get install -y ansible python3-pip unzip
             else
               echo "Install Ansible on this agent first"; exit 1
             fi
@@ -144,25 +127,47 @@ exit 1
     }
 
     // =======================
-    // SonarQube (no Docker)
+    // SonarQube (no Docker) - install locally in workspace
     // =======================
     stage('Setup SonarScanner (no Docker)') {
       steps {
         sh '''
           set -e
-          if ! command -v sonar-scanner >/dev/null 2>&1; then
-            echo "Installing SonarScanner CLI..."
-            SC_ROOT="/opt/sonar-scanner"
-            sudo mkdir -p "$SC_ROOT"
-            cd "$SC_ROOT"
-            # grab latest (adjust version if you want to pin)
-            curl -sSLo scanner.zip https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli.zip
-            sudo apt-get update -y && sudo apt-get install -y unzip
-            sudo unzip -q scanner.zip
-            sudo rm scanner.zip
-            sudo ln -sf /opt/sonar-scanner/sonar-scanner-*/bin/sonar-scanner /usr/local/bin/sonar-scanner
+          TOOLS="${WORKSPACE}/.tools"
+          SC_HOME="${TOOLS}/sonar-scanner"
+          mkdir -p "${SC_HOME}" "${SONAR_USER_HOME}" "${SONAR_WORK_DIR}"
+
+          if [ ! -x "${SC_HOME}/latest/bin/sonar-scanner" ]; then
+            echo "Installing SonarScanner in workspace..."
+            TMP_ZIP="${TOOLS}/sonar-scanner.zip"
+            rm -f "${TMP_ZIP}"
+            if command -v curl >/dev/null 2>&1; then
+              curl -sSfL "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli.zip" -o "${TMP_ZIP}"
+            else
+              wget -q "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli.zip" -O "${TMP_ZIP}"
+            fi
+
+            if command -v unzip >/dev/null 2>&1; then
+              unzip -q "${TMP_ZIP}" -d "${SC_HOME}"
+            else
+              python3 - <<'PY'
+import zipfile, sys, os
+z=sys.argv[1]; d=sys.argv[2]
+os.makedirs(d, exist_ok=True)
+with zipfile.ZipFile(z) as zf: zf.extractall(d)
+PY
+              "${TMP_ZIP}" "${SC_HOME}"
+            fi
+            rm -f "${TMP_ZIP}"
+
+            REAL_DIR="$(find "${SC_HOME}" -maxdepth 1 -type d -name 'sonar-scanner-*' | head -n1)"
+            [ -n "${REAL_DIR}" ] && mv "${REAL_DIR}" "${SC_HOME}/current"
+            ln -snf "${SC_HOME}/current" "${SC_HOME}/latest" || true
           fi
-          mkdir -p "${SONAR_USER_HOME}" "${SONAR_WORK_DIR}"
+
+          echo "export PATH=\\"${SC_HOME}/latest/bin:$PATH\\"" > .env.scanner
+          . ./.env.scanner
+          sonar-scanner -v
         '''
       }
     }
@@ -172,7 +177,8 @@ exit 1
         withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
           sh '''
             set -e
-            echo "Running SonarQube scan against ${SONAR_HOST_URL}..."
+            . ./.env.scanner 2>/dev/null || true
+            mkdir -p "${SONAR_USER_HOME}" "${SONAR_WORK_DIR}"
             export SONAR_HOST_URL="${SONAR_HOST_URL}"
             export SONAR_TOKEN="${SONAR_TOKEN}"
             export SONAR_USER_HOME="${SONAR_USER_HOME}"
@@ -195,12 +201,6 @@ exit 1
   post {
     always {
       archiveArtifacts artifacts: 'logs/ansible-*.log, artifacts/**', allowEmptyArchive: true
-      // Light cleanup of temp dirs (keep caches for speed if you prefer)
-      sh '''
-        rm -rf .venv || true
-        # keep .sonar cache by default; uncomment to purge:
-        # rm -rf "${SONAR_USER_HOME}" "${SONAR_WORK_DIR}" || true
-      '''
     }
   }
 }
