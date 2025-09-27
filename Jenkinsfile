@@ -17,6 +17,10 @@ pipeline {
     DB_NAME = "syslogs"
 
     POINTS = "120"  // rows for snapshot
+
+    // ==== SonarQube ====
+    SONAR_HOST_URL   = "http://18.232.39.51:9000"  // your SonarQube URL
+    SONAR_PROJECT_KEY = "team9-syslogs"            // must match sonar-project.properties
   }
 
   stages {
@@ -114,6 +118,34 @@ exit 1
           cp artifacts/stats_snapshot.csv "artifacts/stats_snapshot_${BUILD_NUMBER}.csv" || true
           cp artifacts/stats_last_hour.png "artifacts/stats_last_${BUILD_NUMBER}.png" || true
         '''
+      }
+    }
+
+    // =======================
+    // SonarQube Analysis
+    // =======================
+    stage('SonarQube Scan') {
+      steps {
+        withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
+          sh '''
+            set -e
+            echo "Running SonarQube scan against ${SONAR_HOST_URL}..."
+            docker run --rm \
+              -e SONAR_HOST_URL="${SONAR_HOST_URL}" \
+              -e SONAR_TOKEN="${SONAR_TOKEN}" \
+              -v "$PWD:/usr/src" \
+              sonarsource/sonar-scanner-cli:latest \
+              sonar-scanner \
+                -Dsonar.projectKey="${SONAR_PROJECT_KEY}" \
+                -Dsonar.working.directory="/usr/src/.scannerwork"
+          '''
+        }
+      }
+    }
+
+    stage('SonarQube Report URL') {
+      steps {
+        echo "Open SonarQube: ${SONAR_HOST_URL}/projects?sort=-analysisDate"
       }
     }
   }
