@@ -3,34 +3,36 @@ pipeline {
   options { timestamps() }
 
   environment {
-    INVENTORY = "inventory.ini"
-    PLAYBOOK  = "deploy-complete-system.yml"
+    INVENTORY   = "inventory.ini"
+    PLAYBOOK    = "deploy-complete-system.yml"
 
-    // --- App endpoints for smoke test ---
-    APP_PUBLIC = "http://54.163.38.65:8082"
-    APP_PRIVATE = "http://172.31.16.135:8082"
+    // App endpoints for smoke test
+    APP_PUBLIC  = "http://3.223.42.1:8082"        // app-server Elastic IP
+    APP_PRIVATE = "http://172.31.16.135:8082"     // app-server private
 
-    // --- DB (use private IP in VPC) ---
+    // DB connection (use DB private IP)
     DB_HOST = "172.31.25.138"
     DB_USER = "devops"
     DB_PASS = "DevOpsPass456"
     DB_NAME = "syslogs"
 
-    POINTS = "120"
+    POINTS = "120"  // rows for snapshot
   }
 
   stages {
-    stage('Checkout') {
-      steps { checkout scm }
-    }
+    stage('Checkout') { steps { checkout scm } }
 
     stage('Install Ansible deps (idempotent)') {
       steps {
         sh '''
           set -e
           if ! command -v ansible >/dev/null 2>&1; then
-            sudo apt-get update -y
-            sudo apt-get install -y ansible python3-pip
+            if command -v apt-get >/dev/null 2>&1; then
+              sudo apt-get update -y
+              sudo apt-get install -y ansible python3-pip
+            else
+              echo "Install Ansible on this agent first"; exit 1
+            fi
           fi
           ansible-galaxy collection install community.mysql community.general --force
           mkdir -p logs
@@ -42,8 +44,8 @@ pipeline {
     stage('Deploy with Ansible') {
       steps {
         withCredentials([sshUserPrivateKey(credentialsId: 'devops-ssh',
-                                          keyFileVariable: 'SSH_KEY',
-                                          usernameVariable: 'SSH_USER')]) {
+                                           keyFileVariable: 'SSH_KEY',
+                                           usernameVariable: 'SSH_USER')]) {
           sh '''
             set -e
             export ANSIBLE_HOST_KEY_CHECKING=false
