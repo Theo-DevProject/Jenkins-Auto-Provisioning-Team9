@@ -1,21 +1,53 @@
+
+---
+# --- Play 1: DB host (idempotent network & service posture) ------------------
 - name: Deploy MySQL Database
   hosts: mysql_servers
   become: yes
-  vars:
-    mysql_host: "{{ ansible_default_ipv4.address }}"
-  roles: [mysql]
+  tasks:
+    - name: Ensure MariaDB server present (Amazon Linux/RHEL)
+      yum:
+        name: mariadb-server
+        state: present
+      when: not (skip_mysql_install | default(false))
 
-- name: Deploy Jenkins Master
-  hosts: jenkins_master
-  become: yes
-  roles: [jenkins]
+    - name: Ensure MariaDB running and enabled
+      ansible.builtin.systemd:
+        name: mariadb
+        state: started
+        enabled: yes
 
+    - name: Allow remote connections (bind-address=0.0.0.0)
+      copy:
+        dest: /etc/my.cnf.d/zz-bind.cnf
+        mode: "0644"
+        content: |
+          [mysqld]
+          bind-address=0.0.0.0
+      notify: Restart mariadb
+
+  handlers:
+    - name: Restart mariadb
+      ansible.builtin.systemd:
+        name: mariadb
+        state: restarted
+        enabled: yes
+        daemon_reload: yes
+
+# --- Play 2: App host (Flask SQL console + metrics agent) --------------------
 - name: Deploy Python Application
   hosts: app_servers
   become: yes
-  vars:
-    mysql_host: "{{ hostvars[groups['mysql_servers'][0]]['ansible_default_ipv4']['address'] }}"
-    db_name: "{{ db_name }}"
-    db_user: "{{ db_user }}"
-    db_password: "{{ db_password }}"
-  roles: [python_app]
+  roles:
+    - role: python_app
+
+# --- Play 3: Jenkins master (optional small deps) ----------------------------
+- name: Prepare Jenkins (optional; if you have a jenkins role)
+  hosts: jenkins_master
+  become: yes
+  tasks:
+    - name: Ensure basic deps
+      apt:
+        name: [curl]
+        state: present
+      when: ansible_os_family == "Debian"
