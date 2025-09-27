@@ -129,48 +129,42 @@ exit 1
     // =======================
     // SonarQube (no Docker) - install locally in workspace
     // =======================
-    stage('Setup SonarScanner (no Docker)') {
-      steps {
-        sh '''
-          set -e
-          TOOLS="${WORKSPACE}/.tools"
-          SC_HOME="${TOOLS}/sonar-scanner"
-          mkdir -p "${SC_HOME}" "${SONAR_USER_HOME}" "${SONAR_WORK_DIR}"
+stage('Setup SonarScanner (no Docker)') {
+  steps {
+    sh '''
+      set -e
+      TOOLS="${WORKSPACE}/.tools"
+      SC_HOME="${TOOLS}/sonar-scanner"
+      mkdir -p "${SC_HOME}" "${SONAR_USER_HOME}" "${SONAR_WORK_DIR}"
 
-          if [ ! -x "${SC_HOME}/latest/bin/sonar-scanner" ]; then
-            echo "Installing SonarScanner in workspace..."
-            TMP_ZIP="${TOOLS}/sonar-scanner.zip"
-            rm -f "${TMP_ZIP}"
-            if command -v curl >/dev/null 2>&1; then
-              curl -sSfL "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli.zip" -o "${TMP_ZIP}"
-            else
-              wget -q "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli.zip" -O "${TMP_ZIP}"
-            fi
+      if [ ! -x "${SC_HOME}/latest/bin/sonar-scanner" ]; then
+        echo "Installing SonarScanner in workspace..."
+        TMP_ZIP="${TOOLS}/sonar-scanner.zip"
+        rm -f "${TMP_ZIP}"
 
-            if command -v unzip >/dev/null 2>&1; then
-              unzip -q "${TMP_ZIP}" -d "${SC_HOME}"
-            else
-              python3 - <<'PY'
-import zipfile, sys, os
-z=sys.argv[1]; d=sys.argv[2]
-os.makedirs(d, exist_ok=True)
-with zipfile.ZipFile(z) as zf: zf.extractall(d)
-PY
-              "${TMP_ZIP}" "${SC_HOME}"
-            fi
-            rm -f "${TMP_ZIP}"
+        VERSION="5.0.1.3006"
+        URL="https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-${VERSION}-linux.zip"
 
-            REAL_DIR="$(find "${SC_HOME}" -maxdepth 1 -type d -name 'sonar-scanner-*' | head -n1)"
-            [ -n "${REAL_DIR}" ] && mv "${REAL_DIR}" "${SC_HOME}/current"
-            ln -snf "${SC_HOME}/current" "${SC_HOME}/latest" || true
-          fi
+        if command -v curl >/dev/null 2>&1; then
+          curl -sSfL "$URL" -o "${TMP_ZIP}"
+        else
+          wget -q "$URL" -O "${TMP_ZIP}"
+        fi
 
-          echo "export PATH=\\"${SC_HOME}/latest/bin:$PATH\\"" > .env.scanner
-          . ./.env.scanner
-          sonar-scanner -v
-        '''
-      }
-    }
+        unzip -q "${TMP_ZIP}" -d "${SC_HOME}"
+        rm -f "${TMP_ZIP}"
+
+        REAL_DIR="$(find "${SC_HOME}" -maxdepth 1 -type d -name 'sonar-scanner-*' | head -n1)"
+        [ -n "${REAL_DIR}" ] && mv "${REAL_DIR}" "${SC_HOME}/current"
+        ln -snf "${SC_HOME}/current" "${SC_HOME}/latest" || true
+      fi
+
+      echo "export PATH=\\"${SC_HOME}/latest/bin:$PATH\\"" > .env.scanner
+      . ./.env.scanner
+      sonar-scanner -v
+    '''
+  }
+}
 
     stage('SonarQube Scan') {
       steps {
