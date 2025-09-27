@@ -1,16 +1,17 @@
 [Unit]
 Description=SQL Console (Flask)
 After=network.target
-RequiresMountsFor=/opt/system-monitor
 
 [Service]
 Type=simple
-Environment="PYTHONUNBUFFERED=1"
-EnvironmentFile=/opt/system-monitor/.env
 WorkingDirectory=/opt/system-monitor
+EnvironmentFile=/opt/system-monitor/.env
 ExecStart=/opt/system-monitor/venv/bin/python -u /opt/system-monitor/sql_console.py
 Restart=always
 RestartSec=2
+StandardOutput=journal
+StandardError=journal
+Environment=PYTHONUNBUFFERED=1
 
 [Install]
 WantedBy=multi-user.target

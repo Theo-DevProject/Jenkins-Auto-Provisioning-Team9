@@ -1,4 +1,3 @@
-# snapshots
 import os, csv, datetime as dt
 import pymysql
 import matplotlib.pyplot as plt

@@ -1,17 +1,20 @@
 ---
-# roles/python_app/tasks/main.yml
-
 # --- Base Python setup --------------------------------------------------------
 - name: Ensure Python + tools (Debian/Ubuntu)
   apt:
-    name: [python3, python3-venv, python3-pip]
+    name:
+      - python3
+      - python3-venv
+      - python3-pip
     state: present
     update_cache: yes
   when: ansible_os_family == "Debian"
 
 - name: Ensure Python + tools (RedHat/Amazon)
   yum:
-    name: [python3, python3-pip]
+    name:
+      - python3
+      - python3-pip
     state: present
   when: ansible_os_family in ["RedHat", "Amazon"]
 
@@ -43,15 +46,10 @@
   args:
     creates: /opt/system-monitor/venv/bin/activate
 
-# --- Environment file from vars (uses Elastic IP) -----------------------------
-- name: Ensure app directory exists
-  ansible.builtin.file:
-    path: /opt/system-monitor
-    state: directory
-    mode: "0755"
-
+# --- Environment (.env) -------------------------------------------------------
+# Preferred: feed these via group_vars/all.yml (shown below)
 - name: Write /opt/system-monitor/.env
-  ansible.builtin.copy:
+  copy:
     dest: /opt/system-monitor/.env
     mode: "0600"
     owner: root
@@ -61,7 +59,8 @@
       DB_USER={{ db_user }}
       DB_PASS={{ db_password }}
       DB_NAME={{ db_name }}
-  notify: Restart sql-console
+  notify:
+    - Restart sql-console
 
 # --- system-monitor service + timer ------------------------------------------
 - name: Create systemd service file (system-monitor)
@@ -99,9 +98,15 @@
       WantedBy=timers.target
   notify:
     - Daemon reload
-    - Enable & start system-monitor timer
+
+- name: Enable & start system-monitor timer
+  systemd:
+    name: system-monitor.timer
+    enabled: yes
+    state: started
 
 # --- SQL console deployment ---------------------------------------------------
+# Place the source file at: roles/python_app/files/sql_console.py
 - name: Copy sql_console.py
   copy:
     src: sql_console.py
@@ -123,27 +128,9 @@
   notify: Daemon reload
 
 - name: Unmask, enable & start sql-console
-  ansible.builtin.systemd:
+  systemd:
     name: sql-console
     masked: no
     enabled: yes
-    state: started
-    daemon_reload: yes
-
-# --- Handlers -----------------------------------------------------------------
-- name: Daemon reload
-  ansible.builtin.systemd:
-    daemon_reload: yes
-
-- name: Enable & start system-monitor timer
-  ansible.builtin.systemd:
-    name: system-monitor.timer
-    state: started
-    enabled: yes
-
-- name: Restart sql-console
-  ansible.builtin.systemd:
-    name: sql-console
     state: restarted
-    enabled: yes
     daemon_reload: yes

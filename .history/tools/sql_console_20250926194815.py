@@ -2,6 +2,7 @@ from flask import Flask, request, render_template_string, send_file
 import pymysql, os, io
 import matplotlib.pyplot as plt
 
+# Defaults to EIP; can be overridden by /opt/system-monitor/.env or unit Environment
 DB_HOST=os.getenv("DB_HOST","98.89.79.137")
 DB_USER=os.getenv("DB_USER","devops")
 DB_PASS=os.getenv("DB_PASS","DevOpsPass456")
@@ -21,7 +22,7 @@ TPL="""
     <tr>{% for c in cols %}<th>{{c}}</th>{% endfor %}</tr>
     {% for r in rows %}<tr>{% for c in r %}<td>{{c}}</td>{% endfor %}</tr>{% endfor %}
   </table>
-  <p><a href="/chart">📊 View Pie Chart (CPU vs Memory)</a></p>
+  <p><a href="/chart">📊 View Pie Chart</a></p>
 {% endif %}
 """
 
@@ -66,20 +67,21 @@ def chart():
         return "No query run yet", 400
     rows, cols = data
 
-    # assume columns: id, timestamp, cpu_usage, memory_usage, ...
+    # Basic pie: total CPU vs Memory across current result set
     try:
-        cpu = sum(float(r[2]) for r in rows if r[2] is not None)
-        mem = sum(float(r[3]) for r in rows if r[3] is not None)
-    except Exception:
-        return "Could not parse numeric CPU/MEM from last result.", 400
+        cpu_idx = cols.index('cpu_usage')
+        mem_idx = cols.index('memory_usage')
+    except ValueError:
+        return "Result set doesn't contain cpu_usage/memory_usage columns.", 400
+
+    cpu = sum(float(r[cpu_idx]) for r in rows if r[cpu_idx] is not None)
+    mem = sum(float(r[mem_idx]) for r in rows if r[mem_idx] is not None)
 
     fig, ax = plt.subplots()
     ax.pie([cpu, mem], labels=["CPU Usage", "Memory Usage"], autopct='%1.1f%%')
-    ax.set_title("CPU vs Memory Usage (sum of last result)")
-
+    ax.set_title("CPU vs Memory Usage (over current result set)")
     img = io.BytesIO()
-    plt.tight_layout()
-    plt.savefig(img, format='png')
+    plt.savefig(img, format='png', bbox_inches='tight')
     img.seek(0)
     return send_file(img, mimetype='image/png')
 
