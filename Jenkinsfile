@@ -3,14 +3,15 @@ pipeline {
   options { timestamps() }
 
   environment {
+    // ===== Ansible =====
     INVENTORY   = "inventory.ini"
     PLAYBOOK    = "deploy-complete-system.yml"
 
-    // App endpoints for smoke test
+    // ===== App endpoints for smoke test =====
     APP_PUBLIC  = "http://3.223.42.1:8082"        // app-server Elastic IP
     APP_PRIVATE = "http://172.31.16.135:8082"     // app-server private
 
-    // DB connection (use DB private IP)
+    // ===== DB connection (private IP) =====
     DB_HOST = "172.31.25.138"
     DB_USER = "devops"
     DB_PASS = "DevOpsPass456"
@@ -18,14 +19,33 @@ pipeline {
 
     POINTS = "120"  // rows for snapshot
 
-    // ==== SonarQube ====
+    // ===== SonarQube =====
     SONAR_HOST_URL    = "http://18.232.39.51:9000"  // your SonarQube URL
     SONAR_PROJECT_KEY = "team9-syslogs"             // must match sonar-project.properties
+    // Sonar caches/work dir (kept inside workspace to avoid root perms)
+    SONAR_USER_HOME   = "${WORKSPACE}/.sonar"
+    SONAR_WORK_DIR    = "${WORKSPACE}/.scannerwork"
   }
 
   stages {
+
     stage('Checkout') {
       steps { checkout scm }
+    }
+
+    stage('Pre-flight: free space') {
+      steps {
+        sh '''
+          set -e
+          echo "Checking free space..."
+          df -h
+          # abort if less than ~1GB free on /
+          FREE=$(df --output=avail -k / | tail -1)
+          if [ "$FREE" -lt 1048576 ]; then
+            echo "ERROR: Less than 1GB free on root filesystem."; exit 1
+          fi
+        '''
+      }
     }
 
     stage('Install Ansible deps (idempotent)') {
@@ -124,30 +144,42 @@ exit 1
     }
 
     // =======================
-    // SonarQube Analysis
+    // SonarQube (no Docker)
     // =======================
+    stage('Setup SonarScanner (no Docker)') {
+      steps {
+        sh '''
+          set -e
+          if ! command -v sonar-scanner >/dev/null 2>&1; then
+            echo "Installing SonarScanner CLI..."
+            SC_ROOT="/opt/sonar-scanner"
+            sudo mkdir -p "$SC_ROOT"
+            cd "$SC_ROOT"
+            # grab latest (adjust version if you want to pin)
+            curl -sSLo scanner.zip https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli.zip
+            sudo apt-get update -y && sudo apt-get install -y unzip
+            sudo unzip -q scanner.zip
+            sudo rm scanner.zip
+            sudo ln -sf /opt/sonar-scanner/sonar-scanner-*/bin/sonar-scanner /usr/local/bin/sonar-scanner
+          fi
+          mkdir -p "${SONAR_USER_HOME}" "${SONAR_WORK_DIR}"
+        '''
+      }
+    }
+
     stage('SonarQube Scan') {
       steps {
         withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
           sh '''
             set -e
             echo "Running SonarQube scan against ${SONAR_HOST_URL}..."
+            export SONAR_HOST_URL="${SONAR_HOST_URL}"
+            export SONAR_TOKEN="${SONAR_TOKEN}"
+            export SONAR_USER_HOME="${SONAR_USER_HOME}"
 
-            # Working + cache dirs owned by Jenkins
-            mkdir -p .scannerwork .sonar
-            chmod -R g+rwx .scannerwork .sonar || true
-
-            docker run --rm \
-              -u "$(id -u):$(id -g)" \
-              -w /usr/src \
-              -e SONAR_HOST_URL="${SONAR_HOST_URL}" \
-              -e SONAR_TOKEN="${SONAR_TOKEN}" \
-              -e SONAR_USER_HOME="/usr/src/.sonar" \
-              -v "$PWD:/usr/src" \
-              sonarsource/sonar-scanner-cli:latest \
-              sonar-scanner \
-                -Dsonar.projectKey="${SONAR_PROJECT_KEY}" \
-                -Dsonar.working.directory="/usr/src/.scannerwork"
+            sonar-scanner \
+              -Dsonar.projectKey="${SONAR_PROJECT_KEY}" \
+              -Dsonar.working.directory="${SONAR_WORK_DIR}"
           '''
         }
       }
@@ -163,6 +195,12 @@ exit 1
   post {
     always {
       archiveArtifacts artifacts: 'logs/ansible-*.log, artifacts/**', allowEmptyArchive: true
+      // Light cleanup of temp dirs (keep caches for speed if you prefer)
+      sh '''
+        rm -rf .venv || true
+        # keep .sonar cache by default; uncomment to purge:
+        # rm -rf "${SONAR_USER_HOME}" "${SONAR_WORK_DIR}" || true
+      '''
     }
   }
 }
