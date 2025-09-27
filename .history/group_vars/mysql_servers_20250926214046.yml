@@ -1,0 +1,2 @@
+# group_vars/mysql_servers.yml
+skip_mysql_install: true
