@@ -124,24 +124,37 @@ exit 1
     // =======================
     // SonarQube Analysis
     // =======================
-    stage('SonarQube Scan') {
-      steps {
-        withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
-          sh '''
-            set -e
-            echo "Running SonarQube scan against ${SONAR_HOST_URL}..."
-            docker run --rm \
-              -e SONAR_HOST_URL="${SONAR_HOST_URL}" \
-              -e SONAR_TOKEN="${SONAR_TOKEN}" \
-              -v "$PWD:/usr/src" \
-              sonarsource/sonar-scanner-cli:latest \
-              sonar-scanner \
-                -Dsonar.projectKey="${SONAR_PROJECT_KEY}" \
-                -Dsonar.working.directory="/usr/src/.scannerwork"
-          '''
-        }
-      }
+  stage('SonarQube Scan') {
+  environment {
+    SONAR_HOST_URL   = 'http://18.232.39.51:9000'
+    SONAR_PROJECT_KEY= 'team9-syslogs'
+    // SONAR_TOKEN should be injected via Jenkins credentials: withCredentials(...) or env var in job config
+  }
+  steps {
+    withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
+      sh '''
+        set -e
+        echo "Running SonarQube scan against ${SONAR_HOST_URL}..."
+
+        # make sure work dir exists and is writable
+        mkdir -p .scannerwork
+        chmod -R g+rwx .scannerwork || true
+
+        # run scanner as the current Jenkins user (match UID/GID) and set working dir
+        docker run --rm \
+          -u "$(id -u):$(id -g)" \
+          -e SONAR_HOST_URL="${SONAR_HOST_URL}" \
+          -e SONAR_TOKEN="${SONAR_TOKEN}" \
+          -v "$PWD:/usr/src" \
+          -w /usr/src \
+          sonarsource/sonar-scanner-cli:latest \
+          sonar-scanner \
+            -Dsonar.projectKey="${SONAR_PROJECT_KEY}" \
+            -Dsonar.working.directory="/usr/src/.scannerwork"
+      '''
     }
+  }
+}
 
     stage('SonarQube Report URL') {
       steps {
