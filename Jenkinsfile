@@ -3,16 +3,13 @@ pipeline {
 
   options {
     timestamps()
-    // Don’t overlap runs
     disableConcurrentBuilds(abortPrevious: true)
-    // Keep history tidy
     buildDiscarder(logRotator(numToKeepStr: '20'))
-    // Cap whole pipeline
     timeout(time: 30, unit: 'MINUTES')
   }
 
   parameters {
-    // Default to Elastic IP so we always probe the public UI first
+    // Default to Elastic IP so public probe is preferred
     string(
       name: 'APP_URL',
       defaultValue: 'http://3.223.42.1:8082',
@@ -24,10 +21,10 @@ pipeline {
     INVENTORY = "inventory.ini"
     PLAYBOOK  = "deploy-complete-system.yml"
 
-    // Private URL (for Jenkins → app over VPC)
+    // Private URL (reachable from Jenkins over VPC)
     APP_URL_PRIVATE = "http://172.31.16.135:8082"
 
-    // DB connection used by tools/snapshot.py
+    // DB connection for the snapshot script
     DB_HOST = "172.31.25.138"
     DB_USER = "devops"
     DB_PASS = "DevOpsPass456"
@@ -57,9 +54,11 @@ pipeline {
 
     stage('Deploy with Ansible') {
       steps {
-        withCredentials([sshUserPrivateKey(credentialsId: 'devops-ssh',
-                                           keyFileVariable: 'SSH_KEY',
-                                           usernameVariable: 'SSH_USER')]) {
+        withCredentials([
+          sshUserPrivateKey(credentialsId: 'devops-ssh',
+                            keyFileVariable: 'SSH_KEY',
+                            usernameVariable: 'SSH_USER')
+        ]) {
           sh '''
             set -e
             mkdir -p logs
@@ -77,88 +76,65 @@ pipeline {
       }
     }
 
-stage('Smoke test: UI & API (public EIP preferred)') {
-  steps {
-    sh '''
+    stage('Smoke test: UI & API (public EIP preferred)') {
+      steps {
+        sh '''
 /usr/bin/env bash <<'BASH'
 set -euo pipefail
 
-# always start fresh this run
-rm -f .console_url .public_ok .private_ok .why_public .why_private || true
+PUB_URL="${APP_URL:-}"                  # elastic IP by default (pipeline param)
+PRIV_URL="${APP_URL_PRIVATE}"
 
-PUB_URL="${APP_URL:-}"
-PRIV_URL="${APP_URL_PRIVATE:-}"
+# probe PUBLIC first, then PRIVATE as fallback
+URLS="$PUB_URL $PRIV_URL"
 
-echo "Public:  ${PUB_URL}"
-echo "Private: ${PRIV_URL}"
+echo "Probing (public then private): $URLS"
 
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY
 export no_proxy='*' NO_PROXY='*'
 
-probe () {
-  local url="$1" name="$2"
-  [ -z "$url" ] && { echo "(${name}) empty URL, skipping"; return 1; }
+for url in $URLS; do
+  [ -z "$url" ] && continue
+  echo "Probing ${url} ..."
+  host_port=${url#http://}; host=${host_port%:*}; port=${host_port##*:}
 
-  local host_port=${url#http://}; host=${host_port%:*}; port=${host_port##*:}
-
-  # TCP reachability
   if timeout 5 bash -lc ":</dev/tcp/$host/$port"; then
-    echo "(${name}) TCP $host:$port reachable"
+    echo "TCP $host:$port is reachable"
   else
-    echo "(${name}) TCP $host:$port NOT reachable (timeout)"
-    echo "tcp-timeout" > ".why_${name}"
-    return 1
+    echo "TCP $host:$port is NOT reachable (timeout)"
   fi
 
-  # HTTP 200?
-  code=$(curl -4 -sS -o /dev/null --connect-timeout 3 --max-time 5 \
-             --noproxy '*' --proxy '' -w '%{http_code}' "$url" || echo "curl-error")
-  echo "(${name}) HTTP code: $code"
-  if [ "$code" = "200" ]; then
-    : > ".${name}_ok"
-    echo "$url" > ".${name}_url"
-    return 0
-  else
-    echo "$code" > ".why_${name}"
-    return 1
-  fi
-}
+  # up to 10 tries; fast-exit on HTTP 200
+  for i in $(seq 1 10); do
+    code=$(curl -4 -sS -o /dev/null --connect-timeout 3 --max-time 5 \
+               --noproxy '*' --proxy '' -w '%{http_code}' "$url" || true)
+    echo "Attempt $i/10 -> $url returned HTTP $code"
+    if [ "$code" = "200" ]; then
+      echo "OK on $url"
+      echo "$url" > .console_url
+      exit 0
+    fi
+    sleep 2
+  done
+done
 
-# probe public first, then private
-probe "$PUB_URL"    "public"  || true
-probe "$PRIV_URL"   "private" || true
-
-# pick the URL to use:
-if [ -f .public_ok ]; then
-  cat .public_url > .console_url
-elif [ -f .private_ok ]; then
-  cat .private_url > .console_url
-else
-  echo "ERROR: neither public nor private console returned HTTP 200"
-  echo "Public reason:  $(cat .why_public  2>/dev/null || echo 'n/a')"
-  echo "Private reason: $(cat .why_private 2>/dev/null || echo 'n/a')"
-  exit 1
-fi
-
-echo "Console URL selected: $(cat .console_url)"
-echo "Public status:  $([ -f .public_ok ] && echo OK || echo FAIL:$(cat .why_public 2>/dev/null))"
-echo "Private status: $([ -f .private_ok ] && echo OK || echo FAIL:$(cat .why_private 2>/dev/null))"
+echo "ERROR: SQL console not reachable from Jenkins."
+exit 1
 BASH
 '''
-  }
-  post {
-    success {
-      script {
-        if (fileExists('.console_url')) {
-          def consoleUrl = readFile('.console_url').trim()
-          echo "✅ Console URL in use: ${consoleUrl}"
+      }
+      post {
+        success {
+          script {
+            def consoleUrl = fileExists('.console_url') ? readFile('.console_url').trim() : params.APP_URL
+            echo "✅ Console URL in use: ${consoleUrl}"
+            echo "🔒 Private fallback (VPC-only): ${env.APP_URL_PRIVATE}"
+          }
         }
-        echo "🛈 Private fallback (VPC-only): ${env.APP_URL_PRIVATE}"
       }
     }
-  }
-}
-  stage('Snapshot metrics (CSV + PNG)') {
+
+    stage('Snapshot metrics (CSV + PNG)') {
       steps {
         sh '''
           set -e
@@ -203,14 +179,16 @@ BASH
                 echo "Using SonarQube at: \${SONAR_HOST_URL}"
                 echo "Scanner home: ${scannerHome}"
 
-                "${scannerHome}/bin/sonar-scanner" \\
-                  -Dsonar.projectKey=team9-syslogs \\
-                  -Dsonar.projectName=team9-syslogs \\
-                  -Dsonar.sources=roles/python_app,tools \\
-                  -Dsonar.inclusions=**/*.py,**/*.yml,**/*.yaml,**/*.j2 \\
-                  -Dsonar.exclusions=**/.venv/**,**/venv/**,**/.scannerwork/**,**/.git/**,**/__pycache__/**,**/*.egg-info/**,**/.history/**,.history/** \\
-                  -Dsonar.secrets.enabled=false \\
-                  -Dsonar.scm.disabled=true \\
+                "${scannerHome}/bin/sonar-scanner" \
+                  -Dsonar.projectKey=team9-syslogs \
+                  -Dsonar.projectName=team9-syslogs \
+                  -Dsonar.sources=roles/python_app,tools \
+                  -Dsonar.inclusions=**/*.py,**/*.yml,**/*.yaml,**/*.j2 \
+                  -Dsonar.exclusions=**/.venv/**,**/venv/**,**/.scannerwork/**,**/.git/**,**/__pycache__/**,**/*.egg-info/**,**/.history/**,.history/** \
+                  -Dsonar.secrets.enabled=false \
+                  -Dsonar.scm.disabled=true \
+                  -Dsonar.python.version=3 \
+                  -Dsonar.coverage.exclusions=roles/**/files/**,roles/**/templates/**,**/tools/**,**/*.yml,**/*.yaml \
                   -Dsonar.scanner.skipSystemTruststore=true
               """
             }
@@ -219,36 +197,37 @@ BASH
       }
     }
 
-stage('Quality Gate') {
-  steps {
-    timeout(time: 10, unit: 'MINUTES') {
-      script {
-        // Do NOT abort the pipeline automatically
-        def qg = waitForQualityGate(abortPipeline: false)
-        echo "Quality Gate status: ${qg.status} ${qg.description ?: ''}"
-        if (qg.status != 'OK') {
-          // Keep the build, but surface it clearly
-          currentBuild.result = 'UNSTABLE'
+    stage('Quality Gate') {
+      steps {
+        timeout(time: 10, unit: 'MINUTES') {
+          script {
+            // Don’t abort the pipeline; mark UNSTABLE if gate not OK
+            def qg = waitForQualityGate(abortPipeline: false)
+            echo "Quality Gate status: ${qg.status} ${qg.description ?: ''}"
+            if (qg.status != 'OK') {
+              currentBuild.result = 'UNSTABLE'
+            }
+          }
+        }
+      }
+      post {
+        always {
+          script {
+            def url = ''
+            if (fileExists('.scannerwork/report-task.txt')) {
+              def rt = readFile '.scannerwork/report-task.txt'
+              url = (rt.readLines().find { it.startsWith('dashboardUrl=') } ?: '')
+                    .replace('dashboardUrl=','')
+            }
+            echo url ? "SonarQube dashboard: ${url}" :
+                       "Could not find dashboardUrl in report-task.txt"
+          }
+          archiveArtifacts artifacts: '.scannerwork/report-task.txt', allowEmptyArchive: true
         }
       }
     }
-  }
-  post {
-    always {
-      script {
-        def url = ''
-        if (fileExists('.scannerwork/report-task.txt')) {
-          def rt = readFile '.scannerwork/report-task.txt'
-          url = (rt.readLines().find { it.startsWith('dashboardUrl=') } ?: '')
-                  .replace('dashboardUrl=','')
-        }
-        echo url ? "SonarQube dashboard: ${url}" :
-                   "Could not find dashboardUrl in report-task.txt"
-      }
-      archiveArtifacts artifacts: '.scannerwork/report-task.txt', allowEmptyArchive: true
-    }
-  }
-}
+
+  } // stages
 
   post {
     always {
