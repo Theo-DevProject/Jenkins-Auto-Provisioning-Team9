@@ -1,12 +1,12 @@
 [Unit]
-Description=Read-only SQL Console (Flask)
+Description=SQL Console (Flask)
 After=network.target
 
 [Service]
 EnvironmentFile=/opt/system-monitor/.env
 WorkingDirectory=/opt/system-monitor
 ExecStart=/opt/system-monitor/venv/bin/python /opt/system-monitor/sql_console.py
-Restart=on-failure
+Restart=always
 
 [Install]
 WantedBy=multi-user.target
