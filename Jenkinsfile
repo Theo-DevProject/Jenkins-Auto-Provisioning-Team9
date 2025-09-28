@@ -225,7 +225,7 @@ stage('SonarQube Scan') {
     }
   }
 }
-/* -------quality gate check --------*/
+/* // -------quality gate check --------*
     stage('Quality Gate') {
       steps {
         timeout(time: 10, unit: 'MINUTES') {
@@ -255,7 +255,8 @@ stage('SonarQube Scan') {
         }
       }
     }
-/* ----end stages -----*/
+// ----end stages -----
+    */
   } // stages
 
   post {
