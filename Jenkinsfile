@@ -1,6 +1,14 @@
 pipeline {
   agent any
-  options { timestamps() }
+  options {
+    timestamps()
+    // ✅ never allow overlaps; when a new run starts, abort any older running one
+    disableConcurrentBuilds(abortPrevious: true)
+    // keep history reasonable
+    buildDiscarder(logRotator(numToKeepStr: '20'))
+    // make log parsing easier if a step hangs
+    timeout(time: 30, unit: 'MINUTES')
+  }
 
   parameters {
     // Leave empty to skip public probe; paste http://<public-ip>:8082 when ready
@@ -147,31 +155,31 @@ BASH
       }
     }
 
-  stage('SonarQube Scan') {
-  steps {
-    withSonarQubeEnv('SonarQube') {
-      script {
-        def scannerHome = tool 'sonar-scanner'
-        timeout(time: 8, unit: 'MINUTES') {
-          sh """#!/usr/bin/env bash
-            set -euo pipefail
-            echo "Using SonarQube at: \${SONAR_HOST_URL}"
-            echo "Scanner home: ${scannerHome}"
+    stage('SonarQube Scan') {
+      steps {
+        withSonarQubeEnv('SonarQube') {
+          script {
+            def scannerHome = tool 'sonar-scanner'
+            timeout(time: 8, unit: 'MINUTES') {
+              sh """#!/usr/bin/env bash
+                set -euo pipefail
+                echo "Using SonarQube at: \${SONAR_HOST_URL}"
+                echo "Scanner home: ${scannerHome}"
 
-            "${scannerHome}/bin/sonar-scanner" \
-              -Dsonar.projectKey=team9-syslogs \
-              -Dsonar.projectName=team9-syslogs \
-              -Dsonar.sources=roles/python_app,tools \
-              -Dsonar.inclusions=**/*.py,**/*.yml,**/*.yaml,**/*.j2 \
-              -Dsonar.exclusions=**/.venv/**,**/venv/**,**/.scannerwork/**,**/.git/**,**/__pycache__/**,**/*.egg-info/**,**/.history/**,.history/** \
-              -Dsonar.secrets.enabled=false \
-              -Dsonar.scanner.skipSystemTruststore=true
-          """
+                "${scannerHome}/bin/sonar-scanner" \\
+                  -Dsonar.projectKey=team9-syslogs \\
+                  -Dsonar.projectName=team9-syslogs \\
+                  -Dsonar.sources=roles/python_app,tools \\
+                  -Dsonar.inclusions=**/*.py,**/*.yml,**/*.yaml,**/*.j2 \\
+                  -Dsonar.exclusions=**/.venv/**,**/venv/**,**/.scannerwork/**,**/.git/**,**/__pycache__/**,**/*.egg-info/**,**/.history/**,.history/** \\
+                  -Dsonar.secrets.enabled=false \\
+                  -Dsonar.scanner.skipSystemTruststore=true
+              """
+            }
+          }
         }
       }
     }
-  }
-}
 
     stage('Quality Gate') {
       steps {
