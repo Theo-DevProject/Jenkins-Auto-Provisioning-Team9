@@ -1,65 +1,99 @@
 # roles/python_app/tasks/main.yml
 
-- name: Ensure Python + tools (RedHat/Amazon)
-  yum:
+# 1) Base Python tools (cross-distro)
+- name: Ensure Python and pip are present
+  package:
     name:
       - python3
       - python3-pip
-      - python3-venv
     state: present
-  when: ansible_os_family in ["RedHat", "Amazon"]
+  become: true
 
+# 2) Install virtualenv via pip (avoid distro-specific *-venv packages)
+- name: Install virtualenv (system-wide)
+  pip:
+    name: virtualenv
+    executable: pip3
+    state: present
+  become: true
+
+# 3) App directory
 - name: Ensure app directory exists
   file:
     path: /opt/system-monitor
     state: directory
     mode: '0755'
+  become: true
 
+# 4) App sources
 - name: Copy metrics agent (log_stats.py)
   copy:
     src: log_stats.py
     dest: /opt/system-monitor/log_stats.py
     mode: '0755'
+  become: true
 
 - name: Copy requirements file
   copy:
     src: requirements.txt
     dest: /opt/system-monitor/requirements.txt
     mode: '0644'
+  become: true
 
-- name: Create Python virtual environment & install deps
-  shell: |
-    set -e
-    test -d /opt/system-monitor/venv || python3 -m venv /opt/system-monitor/venv
-    /opt/system-monitor/venv/bin/pip install --upgrade pip
-    /opt/system-monitor/venv/bin/pip install -r /opt/system-monitor/requirements.txt
+# 5) Create venv using virtualenv (works everywhere)
+- name: Create Python virtual environment
+  command: python3 -m virtualenv /opt/system-monitor/venv
   args:
     creates: /opt/system-monitor/venv/bin/activate
+  become: true
 
-- name: Install Flask + PyMySQL + Matplotlib in venv (for console)
-  shell: |
-    set -e
-    /opt/system-monitor/venv/bin/pip install Flask PyMySQL matplotlib
-  args:
-    creates: /opt/system-monitor/venv/bin/flask
+# 6) Install deps into the venv (idempotent)
+- name: Upgrade pip in venv
+  pip:
+    name: pip
+    state: latest
+    virtualenv: /opt/system-monitor/venv
+  become: true
 
+- name: Install requirements into venv
+  pip:
+    requirements: /opt/system-monitor/requirements.txt
+    virtualenv: /opt/system-monitor/venv
+    state: present
+  become: true
+
+# (Optional) keep if these aren’t inside requirements.txt
+- name: Ensure Flask + PyMySQL + Matplotlib present in venv
+  pip:
+    name:
+      - Flask
+      - PyMySQL
+      - matplotlib
+    virtualenv: /opt/system-monitor/venv
+    state: present
+  become: true
+
+# 7) Runtime configuration + service
 - name: Write /opt/system-monitor/.env (from group vars)
   template:
     src: env_vars.j2
     dest: /opt/system-monitor/.env
     mode: '0644'
+  become: true
 
 - name: Copy sql_console.py
   copy:
     src: sql_console.py
     dest: /opt/system-monitor/sql_console.py
     mode: '0755'
+  become: true
 
 - name: Install systemd unit for SQL console
   template:
     src: sql-console.service.j2
     dest: /etc/systemd/system/sql-console.service
     mode: '0644'
+  become: true
 
 - name: Unmask, enable & start sql-console
   systemd:
@@ -67,3 +101,4 @@
     enabled: true
     state: started
     daemon_reload: true
+  become: true
