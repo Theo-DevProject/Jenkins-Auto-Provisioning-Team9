@@ -3,8 +3,8 @@ pipeline {
   options { timestamps() }
 
   parameters {
-    // Leave empty to skip public probe; paste the correct http://<public-ip>:8082 when you have it
-    string(name: 'APP_URL', defaultValue: '', description: 'Public URL for SQL console (optional). Example: http://18.232.xx.xx:8082')
+    // Leave empty to skip public probe; paste http://<public-ip>:8082 when ready
+    string(name: 'APP_URL', defaultValue: '', description: 'Public URL for SQL console (optional)')
   }
 
   environment {
@@ -65,7 +65,7 @@ pipeline {
       }
     }
 
-stage('Smoke test: SQL console up') {
+    stage('Smoke test: SQL console up') {
       steps {
         sh '''
 /usr/bin/env bash <<'BASH'
@@ -74,11 +74,9 @@ set -euo pipefail
 PUB_URL="${APP_URL:-}"                  # build parameter (may be empty)
 PRIV_URL="${APP_URL_PRIVATE}"
 
-# prefer private first; probe public only if provided
-URLS="${PRIV_URL}"
-if [ -n "$PUB_URL" ]; then
-  URLS="$URLS $PUB_URL"
-fi
+# probe private first, then public if provided
+URLS="$PRIV_URL"
+[ -n "$PUB_URL" ] && URLS="$URLS $PUB_URL"
 
 echo "Probing (private first): $URLS"
 
@@ -89,17 +87,13 @@ for url in $URLS; do
   echo "Probing ${url} ..."
   host_port=${url#http://}; host=${host_port%:*}; port=${host_port##*:}
 
-  # quick TCP check
   if timeout 5 bash -lc ":</dev/tcp/$host/$port"; then
     echo "TCP $host:$port is reachable"
   else
     echo "TCP $host:$port is NOT reachable (timeout)"
   fi
 
-  # HTTP probe (up to 10 tries if private, 5 if public)
-  tries=10
-  if [ "$url" = "$PUB_URL" ]; then tries=5; fi
-
+  tries=10; [ "$url" = "$PUB_URL" ] && tries=5
   for i in $(seq 1 $tries); do
     code=$(curl -4 -sS -o /dev/null --connect-timeout 3 --max-time 5 \
                --noproxy '*' --proxy '' -w '%{http_code}' "$url" || true)
@@ -143,68 +137,67 @@ BASH
 
     stage('Setup SonarScanner (no Docker)') {
       steps {
-        sh '''
-/usr/bin/env bash <<'BASH'
-set -Eeuo pipefail
-echo "SCANNER_HOME=${SCANNER_HOME}"
-test -x "${SCANNER_HOME}/bin/sonar-scanner"
-BASH
-'''
-      }
-    }
-
-stage('SonarQube Scan') {
-  steps {
-    withSonarQubeEnv('SonarQube') {
-      script {
-        // Resolve the path Jenkins installed for the tool named "sonar-scanner"
-        def scannerHome = tool 'sonar-scanner'
-
-        sh """#!/usr/bin/env bash
-          set -euo pipefail
-          echo "Using SonarQube at: \${SONAR_HOST_URL}"
-          echo "Scanner home: ${scannerHome}"
-
-          if [ -f sonar-project.properties ]; then
-            "${scannerHome}/bin/sonar-scanner" -X
-          else
-            "${scannerHome}/bin/sonar-scanner" -X \\
-              -Dsonar.projectKey=team9-syslogs \\
-              -Dsonar.projectName=team9-syslogs \\
-              -Dsonar.sources=.
-          fi
-
-          echo "---- report-task.txt ----"
-          cat .scannerwork/report-task.txt || true
-        """
-      }
-    }
-  }
-}
-
-stage('Quality Gate') {
-  steps {
-    timeout(time: 10, unit: 'MINUTES') {
-      // requires the SQ → Jenkins webhook
-      waitForQualityGate abortPipeline: true
-    }
-  }
-  post {
-    always {
-      script {
-        def url = ''
-        if (fileExists('.scannerwork/report-task.txt')) {
-          def rt = readFile '.scannerwork/report-task.txt'
-          url = (rt.readLines().find { it.startsWith('dashboardUrl=') } ?: '')
-                .replace('dashboardUrl=','')
+        script {
+          def scannerHome = tool 'sonar-scanner'
+          sh """
+            echo "Scanner home: ${scannerHome}"
+            test -x "${scannerHome}/bin/sonar-scanner"
+          """
         }
-        echo url ? "SonarQube dashboard: ${url}" :
-                   "Could not find dashboardUrl in report-task.txt"
       }
-      archiveArtifacts artifacts: '.scannerwork/report-task.txt', allowEmptyArchive: true
+    }
+
+    stage('SonarQube Scan') {
+      steps {
+        withSonarQubeEnv('SonarQube') {
+          script {
+            def scannerHome = tool 'sonar-scanner'
+
+            sh """#!/usr/bin/env bash
+              set -euo pipefail
+              echo "Using SonarQube at: \${SONAR_HOST_URL}"
+              echo "Scanner home: ${scannerHome}"
+
+              if [ -f sonar-project.properties ]; then
+                "${scannerHome}/bin/sonar-scanner" -X
+              else
+                "${scannerHome}/bin/sonar-scanner" -X \\
+                  -Dsonar.projectKey=team9-syslogs \\
+                  -Dsonar.projectName=team9-syslogs \\
+                  -Dsonar.sources=.
+              fi
+
+              echo "---- report-task.txt ----"
+              cat .scannerwork/report-task.txt || true
+            """
+          }
+        }
+      }
+    }
+
+    stage('Quality Gate') {
+      steps {
+        timeout(time: 10, unit: 'MINUTES') {
+          waitForQualityGate abortPipeline: true
+        }
+      }
+      post {
+        always {
+          script {
+            def url = ''
+            if (fileExists('.scannerwork/report-task.txt')) {
+              def rt = readFile '.scannerwork/report-task.txt'
+              url = (rt.readLines().find { it.startsWith('dashboardUrl=') } ?: '')
+                    .replace('dashboardUrl=','')
+            }
+            echo url ? "SonarQube dashboard: ${url}" :
+                       "Could not find dashboardUrl in report-task.txt"
+          }
+          archiveArtifacts artifacts: '.scannerwork/report-task.txt', allowEmptyArchive: true
+        }
+      }
     }
   }
-}
 
   post {
     always {
