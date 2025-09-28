@@ -2,21 +2,25 @@ pipeline {
   agent any
   options { timestamps() }
 
-  tools {
-    jdk 'jdk17' // Manage Jenkins → Tools
+  parameters {
+    // Leave empty to skip public probe; paste the correct http://<public-ip>:8082 when you have it
+    string(name: 'APP_URL', defaultValue: '', description: 'Public URL for SQL console (optional). Example: http://18.232.xx.xx:8082')
   }
 
   environment {
-    SCANNER_HOME = tool 'sonar-scanner'      // Manage Jenkins → Tools
-    SONAR_SCANNER_OPTS = '-Xmx512m'
-    INVENTORY = 'inventory.ini'
-    PLAYBOOK  = 'deploy-complete-system.yml'
-    APP_URL   = 'http://54.210.34.76:8082'   // public; OK if it times out but private succeeds
-    DB_HOST = '172.31.25.138'
-    DB_USER = 'devops'
-    DB_PASS = 'DevOpsPass456'
-    DB_NAME = 'syslogs'
-    POINTS  = '120'
+    INVENTORY = "inventory.ini"
+    PLAYBOOK  = "deploy-complete-system.yml"
+
+    // Private URL (reachable from Jenkins over VPC)
+    APP_URL_PRIVATE = "http://172.31.16.135:8082"
+
+    // DB connection for the snapshot script
+    DB_HOST = "172.31.25.138"
+    DB_USER = "devops"
+    DB_PASS = "DevOpsPass456"
+    DB_NAME = "syslogs"
+
+    POINTS = "120"
   }
 
   stages {
@@ -61,14 +65,22 @@ pipeline {
       }
     }
 
-    stage('Smoke test: SQL console up') {
+stage('Smoke test: SQL console up') {
       steps {
         sh '''
 /usr/bin/env bash <<'BASH'
-set -Eeuo pipefail
+set -euo pipefail
 
-URLS="${APP_URL} http://172.31.16.135:8082"
-echo "Probing (public first): $URLS"
+PUB_URL="${APP_URL:-}"                  # build parameter (may be empty)
+PRIV_URL="${APP_URL_PRIVATE}"
+
+# prefer private first; probe public only if provided
+URLS="${PRIV_URL}"
+if [ -n "$PUB_URL" ]; then
+  URLS="$URLS $PUB_URL"
+fi
+
+echo "Probing (private first): $URLS"
 
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY
 export no_proxy='*' NO_PROXY='*'
@@ -77,22 +89,22 @@ for url in $URLS; do
   echo "Probing ${url} ..."
   host_port=${url#http://}; host=${host_port%:*}; port=${host_port##*:}
 
-  tries=3
-  if [[ ! $host =~ ^(10\\.|172\\.(1[6-9]|2[0-9]|3[0-1])\\.|192\\.168\\.)$ ]]; then
-    tries=10
-  fi
-
+  # quick TCP check
   if timeout 5 bash -lc ":</dev/tcp/$host/$port"; then
     echo "TCP $host:$port is reachable"
   else
     echo "TCP $host:$port is NOT reachable (timeout)"
   fi
 
+  # HTTP probe (up to 10 tries if private, 5 if public)
+  tries=10
+  if [ "$url" = "$PUB_URL" ]; then tries=5; fi
+
   for i in $(seq 1 $tries); do
     code=$(curl -4 -sS -o /dev/null --connect-timeout 3 --max-time 5 \
                --noproxy '*' --proxy '' -w '%{http_code}' "$url" || true)
     echo "Attempt $i/$tries -> $url returned HTTP $code"
-    if [[ "$code" == "200" ]]; then
+    if [ "$code" = "200" ]; then
       echo "OK on $url"
       exit 0
     fi
@@ -100,7 +112,7 @@ for url in $URLS; do
   done
 done
 
-echo "ERROR: SQL console not reachable from Jenkins (public nor private)."
+echo "ERROR: SQL console not reachable from Jenkins."
 exit 1
 BASH
 '''
