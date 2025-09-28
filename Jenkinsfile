@@ -2,24 +2,25 @@ pipeline {
   agent any
   options { timestamps() }
 
+  tools {
+    // Name must match Manage Jenkins → Tools (Temurin 17 you added)
+    jdk 'jdk17'
+  }
+
   environment {
-    INVENTORY = "inventory.ini"
-    PLAYBOOK  = "deploy-complete-system.yml"
-
-    // SQL console endpoint (public URL)
-    APP_URL   = "http://54.210.34.76:8082"
-
-    // DB connection for the snapshot script
-    DB_HOST = "172.31.25.138"
-    DB_USER = "devops"
-    DB_PASS = "DevOpsPass456"
-    DB_NAME = "syslogs"
-
-    // how many recent rows to pull for the CSV/PNG
-    POINTS = "120"
-
-    // SonarQube scanner tool
+    // Jenkins → Tools → SonarQube Scanner: name must be 'sonar-scanner'
     SCANNER_HOME = tool 'sonar-scanner'
+    // (Optional) give the scanner more heap if needed
+    SONAR_SCANNER_OPTS = '-Xmx512m'
+    // Your existing env
+    INVENTORY = 'inventory.ini'
+    PLAYBOOK  = 'deploy-complete-system.yml'
+    APP_URL   = 'http://54.210.34.76:8082'
+    DB_HOST = '172.31.25.138'
+    DB_USER = 'devops'
+    DB_PASS = 'DevOpsPass456'
+    DB_NAME = 'syslogs'
+    POINTS  = '120'
   }
 
   stages {
@@ -68,7 +69,7 @@ pipeline {
       steps {
         sh '''
 /usr/bin/env bash <<'BASH'
-set -euo pipefail
+set -Eeuo pipefail
 
 URLS="${APP_URL} http://172.31.16.135:8082"
 echo "Probing (public first): $URLS"
@@ -95,7 +96,7 @@ for url in $URLS; do
     code=$(curl -4 -sS -o /dev/null --connect-timeout 3 --max-time 5 \
                --noproxy '*' --proxy '' -w '%{http_code}' "$url" || true)
     echo "Attempt $i/$tries -> $url returned HTTP $code"
-    if [ "$code" = "200" ]; then
+    if [[ "$code" == "200" ]]; then
       echo "OK on $url"
       exit 0
     fi
@@ -103,7 +104,7 @@ for url in $URLS; do
   done
 done
 
-echo "ERROR: SQL console not reachable."
+echo "ERROR: SQL console not reachable from Jenkins (public nor private)."
 exit 1
 BASH
 '''
@@ -130,26 +131,44 @@ BASH
       }
     }
 
+    /* ---------- SonarQube ---------- */
+
+    stage('Setup SonarScanner (no Docker)') {
+      steps {
+        sh '''
+/usr/bin/env bash <<'BASH'
+set -Eeuo pipefail
+echo "SCANNER_HOME=${SCANNER_HOME}"
+test -x "${SCANNER_HOME}/bin/sonar-scanner"
+BASH
+'''
+      }
+    }
+
     stage('SonarQube Scan') {
       steps {
-        withSonarQubeEnv('SonarQube') {
-          sh '''
-            set -euo pipefail
-            echo "SCANNER_HOME=${SCANNER_HOME}"
-            echo "Using SonarQube at: ${SONAR_HOST_URL}"
+        ansiColor('xterm') {
+          withSonarQubeEnv('SonarQube') {
+            sh '''
+#!/usr/bin/env bash
+set -Eeuo pipefail
 
-            if [ -f sonar-project.properties ]; then
-              "${SCANNER_HOME}/bin/sonar-scanner" -X
-            else
-              "${SCANNER_HOME}/bin/sonar-scanner" -X \
-                -Dsonar.projectKey=team9-syslogs \
-                -Dsonar.projectName=team9-syslogs \
-                -Dsonar.sources=.
-            fi
+echo "SCANNER_HOME=${SCANNER_HOME}"
+echo "Using SonarQube at: ${SONAR_HOST_URL}"
 
-            echo "---- report-task.txt ----"
-            cat .scannerwork/report-task.txt || true
-          '''
+if [[ -f sonar-project.properties ]]; then
+  "${SCANNER_HOME}/bin/sonar-scanner" -X
+else
+  "${SCANNER_HOME}/bin/sonar-scanner" -X \
+    -Dsonar.projectKey=team9-syslogs \
+    -Dsonar.projectName=team9-syslogs \
+    -Dsonar.sources=.
+fi
+
+echo "---- report-task.txt ----"
+cat .scannerwork/report-task.txt || true
+'''
+          }
         }
       }
     }
@@ -163,13 +182,15 @@ BASH
       post {
         always {
           script {
-            def rt = readFile '.scannerwork/report-task.txt'
-            def url = (rt.readLines().find { it.startsWith('dashboardUrl=') } ?: '')
-                       .replace('dashboardUrl=','')
+            def url = ''
+            if (fileExists('.scannerwork/report-task.txt')) {
+              def lines = readFile('.scannerwork/report-task.txt').readLines()
+              url = (lines.find { it.startsWith('dashboardUrl=') } ?: '').replace('dashboardUrl=','')
+            }
             if (url) {
               echo "SonarQube dashboard: ${url}"
             } else {
-              echo "Could not find dashboardUrl in report-task.txt"
+              echo 'Could not find dashboardUrl in report-task.txt'
             }
           }
           archiveArtifacts artifacts: '.scannerwork/report-task.txt', allowEmptyArchive: true
