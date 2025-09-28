@@ -14,8 +14,6 @@ Safeguards:
 
 import os
 import re
-import json
-from datetime import datetime
 from typing import Tuple, List, Dict
 
 from flask import Flask, request, jsonify, render_template, abort
@@ -54,17 +52,13 @@ def get_db():
 def _validate_sql(sql: str) -> Tuple[bool, str]:
     """Only allow read-only SELECT with a LIMIT (<= 1000)."""
     s = sql.strip().rstrip(";")
-    # must start with SELECT
     if not re.match(r"(?is)^\s*select\b", s):
         return False, "Only SELECT statements are allowed."
-    # forbid dangerous keywords
     if re.search(r"(?is)\b(insert|update|delete|drop|alter|create|truncate|grant|revoke)\b", s):
         return False, "Only read-only SELECT is allowed."
-    # must have LIMIT
     m = re.search(r"(?is)\blimit\s+(\d+)\b", s)
     if not m:
         return False, "Please include a LIMIT (e.g. LIMIT 100)."
-    # cap LIMIT to 1000
     try:
         lim = int(m.group(1))
         if lim > 1000:
@@ -78,9 +72,11 @@ def _summarize(rows: List[Dict]) -> Dict:
     """Compute quick KPIs from common column names if present."""
     if not rows:
         return {"avg_memory": None, "avg_cpu": None, "count": 0}
+
     def avg(col):
         vals = [r[col] for r in rows if col in r and isinstance(r[col], (int, float))]
         return round(sum(vals) / len(vals), 2) if vals else None
+
     return {
         "avg_memory": avg("memory_usage"),
         "avg_cpu": avg("cpu_usage"),
@@ -88,7 +84,7 @@ def _summarize(rows: List[Dict]) -> Dict:
     }
 
 
-def _run_sql(sql: str) -> Tuple[List[str], List[Dict], Dict]:
+def _run_sql(sql: str):
     ok, cleaned = _validate_sql(sql)
     if not ok:
         abort(400, cleaned)
@@ -101,7 +97,9 @@ def _run_sql(sql: str) -> Tuple[List[str], List[Dict], Dict]:
 
 @app.route("/", methods=["GET"])
 def home():
-    return render_template("dashboard.html", default_query=DEFAULT_QUERY)
+    # NEW: pass REFRESH_MS into the template so JS can read it
+    refresh_ms = int(os.getenv("REFRESH_MS", "2000"))
+    return render_template("dashboard.html", default_query=DEFAULT_QUERY, refresh_ms=refresh_ms)
 
 
 @app.route("/api/query", methods=["GET", "POST"])
@@ -112,7 +110,7 @@ def api_query():
         sql = (data.get("sql") or "").strip()
         if not sql:
             abort(400, "Missing 'sql' in JSON body.")
-        _last_sql = sql  # remember last SQL for auto-refresh
+        _last_sql = sql
     else:
         sql = _last_sql
     cols, rows, summary = _run_sql(sql)
