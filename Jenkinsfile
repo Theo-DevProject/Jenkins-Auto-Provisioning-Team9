@@ -147,18 +147,26 @@ BASH
       }
     }
 
-  stage('SonarQube Scan') {
+ stage('SonarQube Scan') {
   steps {
     withSonarQubeEnv('SonarQube') {
       script {
         def scannerHome = tool 'sonar-scanner'
-        timeout(time: 8, unit: 'MINUTES') {
-          sh """#!/usr/bin/env bash
-            set -euo pipefail
-            echo "Using SonarQube at: \${SONAR_HOST_URL}"
-            "${scannerHome}/bin/sonar-scanner"
-          """
-        }
+
+        sh """#!/usr/bin/env bash
+          set -euo pipefail
+          echo "Using SonarQube at: \${SONAR_HOST_URL}"
+          echo "Scanner home: ${scannerHome}"
+
+          if [ -f sonar-project.properties ]; then
+            "${scannerHome}/bin/sonar-scanner" -X
+          else
+            "${scannerHome}/bin/sonar-scanner" -X \\
+              -Dsonar.projectKey=team9-syslogs \\
+              -Dsonar.projectName=team9-syslogs \\
+              -Dsonar.sources=.
+          fi
+        """
       }
     }
   }
