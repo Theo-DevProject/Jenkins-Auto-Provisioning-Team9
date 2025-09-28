@@ -1,20 +1,8 @@
 pipeline {
   agent any
-  options {
-    timestamps()
-    ansiColor('xterm')
-  }
-
-  tools {
-    // from Manage Jenkins → Tools
-    jdk 'jdk17'
-  }
+  options { timestamps() }
 
   environment {
-    // Jenkins tool name for "SonarQube Scanner"
-    SCANNER_HOME = tool 'sonar-scanner'
-
-    // --- your existing vars ---
     INVENTORY = "inventory.ini"
     PLAYBOOK  = "deploy-complete-system.yml"
 
@@ -29,10 +17,13 @@ pipeline {
 
     // how many recent rows to pull for the CSV/PNG
     POINTS = "120"
+
+    // SonarQube scanner tool
+    SCANNER_HOME = tool 'sonar-scanner'
   }
 
   stages {
-    stage('Checkout SCM') {
+    stage('Checkout') {
       steps { checkout scm }
     }
 
@@ -112,7 +103,7 @@ for url in $URLS; do
   done
 done
 
-echo "ERROR: SQL console not reachable from Jenkins (public nor private)."
+echo "ERROR: SQL console not reachable."
 exit 1
 BASH
 '''
@@ -139,21 +130,25 @@ BASH
       }
     }
 
-    /* ------------------ SonarQube ------------------ */
     stage('SonarQube Scan') {
       steps {
-        // "SonarQube" must match the name in Configure System → SonarQube servers
         withSonarQubeEnv('SonarQube') {
           sh '''
-            set -e
-            # If you have sonar-project.properties in the repo, this single line is enough:
-            "${SCANNER_HOME}/bin/sonar-scanner"
+            set -euo pipefail
+            echo "SCANNER_HOME=${SCANNER_HOME}"
+            echo "Using SonarQube at: ${SONAR_HOST_URL}"
 
-            # Otherwise, uncomment and pass the basics explicitly:
-            # "${SCANNER_HOME}/bin/sonar-scanner" \
-            #   -Dsonar.projectKey=team9-syslogs \
-            #   -Dsonar.projectName=team9-syslogs \
-            #   -Dsonar.sources=.
+            if [ -f sonar-project.properties ]; then
+              "${SCANNER_HOME}/bin/sonar-scanner" -X
+            else
+              "${SCANNER_HOME}/bin/sonar-scanner" -X \
+                -Dsonar.projectKey=team9-syslogs \
+                -Dsonar.projectName=team9-syslogs \
+                -Dsonar.sources=.
+            fi
+
+            echo "---- report-task.txt ----"
+            cat .scannerwork/report-task.txt || true
           '''
         }
       }
@@ -161,9 +156,23 @@ BASH
 
     stage('Quality Gate') {
       steps {
-        // Requires the SQ webhook to reach Jenkins at /sonarqube-webhook/
         timeout(time: 10, unit: 'MINUTES') {
           waitForQualityGate abortPipeline: true
+        }
+      }
+      post {
+        always {
+          script {
+            def rt = readFile '.scannerwork/report-task.txt'
+            def url = (rt.readLines().find { it.startsWith('dashboardUrl=') } ?: '')
+                       .replace('dashboardUrl=','')
+            if (url) {
+              echo "SonarQube dashboard: ${url}"
+            } else {
+              echo "Could not find dashboardUrl in report-task.txt"
+            }
+          }
+          archiveArtifacts artifacts: '.scannerwork/report-task.txt', allowEmptyArchive: true
         }
       }
     }
