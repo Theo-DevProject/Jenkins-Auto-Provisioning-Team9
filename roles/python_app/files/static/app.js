@@ -103,7 +103,7 @@
   // live refresh the **last** SQL (the one you ran)
   function startTimer() {
     if (timer) clearInterval(timer);
-    timer = setInterval(() => runQuery(lastSQL, false), 5000);
+    timer = setInterval(() => runQuery(lastSQL, false), 2000); // refresh every 2s
   }
   function stopTimer() {
     if (timer) clearInterval(timer);

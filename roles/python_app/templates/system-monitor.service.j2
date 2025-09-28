@@ -1,8 +1,17 @@
 [Unit]
-Description=System Monitor (writes metrics to DB)
-After=network.target
+Description=Collect CPU/memory and write to MySQL
+After=network-online.target mysql.service mariadb.service
+Wants=network-online.target
 
 [Service]
+Type=simple
 EnvironmentFile=/opt/system-monitor/.env
+User=root
 ExecStart=/opt/system-monitor/venv/bin/python /opt/system-monitor/log_stats.py
-Type=oneshot
+WorkingDirectory=/opt/system-monitor
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+
