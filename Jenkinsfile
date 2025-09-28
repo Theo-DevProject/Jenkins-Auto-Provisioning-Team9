@@ -1,12 +1,12 @@
 pipeline {
   agent any
+
   options {
     timestamps()
-    // ✅ never allow overlaps; when a new run starts, abort any older running one
+    // Prevent overlapping runs: a new one aborts the previous
     disableConcurrentBuilds(abortPrevious: true)
-    // keep history reasonable
     buildDiscarder(logRotator(numToKeepStr: '20'))
-    // make log parsing easier if a step hangs
+    // Hard cap for the whole pipeline
     timeout(time: 30, unit: 'MINUTES')
   }
 
@@ -160,19 +160,21 @@ BASH
         withSonarQubeEnv('SonarQube') {
           script {
             def scannerHome = tool 'sonar-scanner'
-            timeout(time: 8, unit: 'MINUTES') {
+            // Let the scan run longer than default; server can be slow on first use
+            timeout(time: 25, unit: 'MINUTES') {
               sh """#!/usr/bin/env bash
                 set -euo pipefail
                 echo "Using SonarQube at: \${SONAR_HOST_URL}"
                 echo "Scanner home: ${scannerHome}"
 
-                "${scannerHome}/bin/sonar-scanner" \\
-                  -Dsonar.projectKey=team9-syslogs \\
-                  -Dsonar.projectName=team9-syslogs \\
-                  -Dsonar.sources=roles/python_app,tools \\
-                  -Dsonar.inclusions=**/*.py,**/*.yml,**/*.yaml,**/*.j2 \\
-                  -Dsonar.exclusions=**/.venv/**,**/venv/**,**/.scannerwork/**,**/.git/**,**/__pycache__/**,**/*.egg-info/**,**/.history/**,.history/** \\
-                  -Dsonar.secrets.enabled=false \\
+                "${scannerHome}/bin/sonar-scanner" \
+                  -Dsonar.projectKey=team9-syslogs \
+                  -Dsonar.projectName=team9-syslogs \
+                  -Dsonar.sources=roles/python_app,tools \
+                  -Dsonar.inclusions=**/*.py,**/*.yml,**/*.yaml,**/*.j2 \
+                  -Dsonar.exclusions=**/.venv/**,**/venv/**,**/.scannerwork/**,**/.git/**,**/__pycache__/**,**/*.egg-info/**,**/.history/**,.history/** \
+                  -Dsonar.secrets.enabled=false \
+                  -Dsonar.scm.disabled=true \
                   -Dsonar.scanner.skipSystemTruststore=true
               """
             }
