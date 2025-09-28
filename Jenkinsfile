@@ -225,38 +225,37 @@ stage('SonarQube Scan') {
     }
   }
 }
-/* // -------quality gate check --------*
-    stage('Quality Gate') {
-      steps {
-        timeout(time: 10, unit: 'MINUTES') {
-          script {
-            // Don’t abort the pipeline; mark UNSTABLE if gate not OK
-            def qg = waitForQualityGate(abortPipeline: false)
-            echo "Quality Gate status: ${qg.status} ${qg.description ?: ''}"
-            if (qg.status != 'OK') {
-              currentBuild.result = 'UNSTABLE'
-            }
-          }
-        }
-      }
-      post {
-        always {
-          script {
-            def url = ''
-            if (fileExists('.scannerwork/report-task.txt')) {
-              def rt = readFile '.scannerwork/report-task.txt'
-              url = (rt.readLines().find { it.startsWith('dashboardUrl=') } ?: '')
-                    .replace('dashboardUrl=','')
-            }
-            echo url ? "SonarQube dashboard: ${url}" :
-                       "Could not find dashboardUrl in report-task.txt"
-          }
-          archiveArtifacts artifacts: '.scannerwork/report-task.txt', allowEmptyArchive: true
-        }
+// -------quality gate check --------*
+stage('Quality Gate') {
+  steps {
+    timeout(time: 10, unit: 'MINUTES') {
+      script {
+        // Non-blocking: do NOT abort the pipeline
+        def qg = waitForQualityGate abortPipeline: false
+        echo "Quality Gate status: ${qg.status}"  // OK / WARN / ERROR / NONE
+        // If you still want a soft fail marker, uncomment next line:
+        // if (qg.status == 'ERROR') currentBuild.result = 'UNSTABLE'
       }
     }
+  }
+  post {
+    always {
+      script {
+        def url = ''
+        if (fileExists('.scannerwork/report-task.txt')) {
+          def rt = readFile '.scannerwork/report-task.txt'
+          url = (rt.readLines().find { it.startsWith('dashboardUrl=') } ?: '')
+                .replace('dashboardUrl=','')
+        }
+        echo url ? "SonarQube dashboard: ${url}" :
+                   "Could not find dashboardUrl in report-task.txt"
+      }
+      archiveArtifacts artifacts: '.scannerwork/report-task.txt', allowEmptyArchive: true
+    }
+  }
+}
 // ----end stages -----
-    */
+    
   } // stages
 
   post {
