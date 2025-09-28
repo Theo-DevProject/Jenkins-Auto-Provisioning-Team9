@@ -156,48 +156,55 @@ BASH
 stage('SonarQube Scan') {
   steps {
     withSonarQubeEnv('SonarQube') {
-      sh '''#!/bin/bash
-        set -euo pipefail
-        echo "SCANNER_HOME=${SCANNER_HOME}"
-        echo "Using SonarQube at: ${SONAR_HOST_URL}"
+      script {
+        // Resolve the path Jenkins installed for the tool named "sonar-scanner"
+        def scannerHome = tool 'sonar-scanner'
 
-        if [ -f sonar-project.properties ]; then
-          "${SCANNER_HOME}/bin/sonar-scanner" -X
-        else
-          "${SCANNER_HOME}/bin/sonar-scanner" -X \
-            -Dsonar.projectKey=team9-syslogs \
-            -Dsonar.projectName=team9-syslogs \
-            -Dsonar.sources=.
-        fi
+        sh """#!/usr/bin/env bash
+          set -euo pipefail
+          echo "Using SonarQube at: \${SONAR_HOST_URL}"
+          echo "Scanner home: ${scannerHome}"
 
-        echo "---- report-task.txt ----"
-        cat .scannerwork/report-task.txt || true
-      '''
+          if [ -f sonar-project.properties ]; then
+            "${scannerHome}/bin/sonar-scanner" -X
+          else
+            "${scannerHome}/bin/sonar-scanner" -X \\
+              -Dsonar.projectKey=team9-syslogs \\
+              -Dsonar.projectName=team9-syslogs \\
+              -Dsonar.sources=.
+          fi
+
+          echo "---- report-task.txt ----"
+          cat .scannerwork/report-task.txt || true
+        """
+      }
     }
   }
 }
 
-    stage('Quality Gate') {
-      steps {
-        timeout(time: 10, unit: 'MINUTES') {
-          waitForQualityGate abortPipeline: true
-        }
-      }
-      post {
-        always {
-          script {
-            def url = ''
-            if (fileExists('.scannerwork/report-task.txt')) {
-              def lines = readFile('.scannerwork/report-task.txt').readLines()
-              url = (lines.find { it.startsWith('dashboardUrl=') } ?: '').replace('dashboardUrl=','')
-            }
-            echo url ? "SonarQube dashboard: ${url}" : 'Could not find dashboardUrl in report-task.txt'
-          }
-          archiveArtifacts artifacts: '.scannerwork/report-task.txt', allowEmptyArchive: true
-        }
-      }
+stage('Quality Gate') {
+  steps {
+    timeout(time: 10, unit: 'MINUTES') {
+      // requires the SQ → Jenkins webhook
+      waitForQualityGate abortPipeline: true
     }
   }
+  post {
+    always {
+      script {
+        def url = ''
+        if (fileExists('.scannerwork/report-task.txt')) {
+          def rt = readFile '.scannerwork/report-task.txt'
+          url = (rt.readLines().find { it.startsWith('dashboardUrl=') } ?: '')
+                .replace('dashboardUrl=','')
+        }
+        echo url ? "SonarQube dashboard: ${url}" :
+                   "Could not find dashboardUrl in report-task.txt"
+      }
+      archiveArtifacts artifacts: '.scannerwork/report-task.txt', allowEmptyArchive: true
+    }
+  }
+}
 
   post {
     always {
