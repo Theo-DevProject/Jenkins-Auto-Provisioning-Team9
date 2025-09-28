@@ -167,36 +167,7 @@ BASH
         }
       }
     }
-/*  // ----------unite test -------------
-stage('Unit tests (pytest + coverage)') {
-  steps {
-    sh '''
-      set -e
-      python3 -m venv .venv || true
-      . .venv/bin/activate
-      pip install --upgrade pip
-      pip install pytest pytest-cov
 
-      # Create a minimal tests directory if it doesn’t exist
-      mkdir -p tests
-
-      # Example smoke test that at least imports your app
-      cat > tests/test_imports.py <<'PY'
-import importlib
-
-def test_imports():
-    # Import main console app to ensure it loads
-    importlib.import_module("roles.python_app.files.sql_console")
-PY
-
-      # Run pytest with coverage
-      pytest -q --maxfail=1 --disable-warnings \
-        --cov=roles/python_app/files --cov-report=xml:coverage.xml
-    '''
-    archiveArtifacts artifacts: 'coverage.xml', allowEmptyArchive: true
-  }
-}
-*/
 /* ---------------sonarqube scane ---------*/
 stage('SonarQube Scan') {
   steps {
