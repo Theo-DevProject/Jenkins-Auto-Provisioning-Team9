@@ -167,36 +167,64 @@ BASH
         }
       }
     }
+/* ----------unite test -------------*/
+stage('Unit tests (pytest + coverage)') {
+  steps {
+    sh '''
+      set -e
+      python3 -m venv .venv || true
+      . .venv/bin/activate
+      pip install --upgrade pip
+      pip install pytest pytest-cov
 
-    stage('SonarQube Scan') {
-      steps {
-        withSonarQubeEnv('SonarQube') {
-          script {
-            def scannerHome = tool 'sonar-scanner'
-            timeout(time: 25, unit: 'MINUTES') {
-              sh """#!/usr/bin/env bash
-                set -euo pipefail
-                echo "Using SonarQube at: \${SONAR_HOST_URL}"
-                echo "Scanner home: ${scannerHome}"
+      # Create a minimal tests directory if it doesn’t exist
+      mkdir -p tests
 
-                "${scannerHome}/bin/sonar-scanner" \
-                  -Dsonar.projectKey=team9-syslogs \
-                  -Dsonar.projectName=team9-syslogs \
-                  -Dsonar.sources=roles/python_app,tools \
-                  -Dsonar.inclusions=**/*.py,**/*.yml,**/*.yaml,**/*.j2 \
-                  -Dsonar.exclusions=**/.venv/**,**/venv/**,**/.scannerwork/**,**/.git/**,**/__pycache__/**,**/*.egg-info/**,**/.history/**,.history/** \
-                  -Dsonar.secrets.enabled=false \
-                  -Dsonar.scm.disabled=true \
-                  -Dsonar.python.version=3 \
-                  -Dsonar.coverage.exclusions=roles/**/files/**,roles/**/templates/**,**/tools/**,**/*.yml,**/*.yaml \
-                  -Dsonar.scanner.skipSystemTruststore=true
-              """
-            }
-          }
+      # Example smoke test that at least imports your app
+      cat > tests/test_imports.py <<'PY'
+import importlib
+
+def test_imports():
+    # Import main console app to ensure it loads
+    importlib.import_module("roles.python_app.files.sql_console")
+PY
+
+      # Run pytest with coverage
+      pytest -q --maxfail=1 --disable-warnings \
+        --cov=roles/python_app/files --cov-report=xml:coverage.xml
+    '''
+    archiveArtifacts artifacts: 'coverage.xml', allowEmptyArchive: true
+  }
+}
+/* ---------------sonarqube scane ---------*/
+stage('SonarQube Scan') {
+  steps {
+    withSonarQubeEnv('SonarQube') {
+      script {
+        def scannerHome = tool 'sonar-scanner'
+        timeout(time: 25, unit: 'MINUTES') {
+          sh """#!/usr/bin/env bash
+            set -euo pipefail
+            echo "Using SonarQube at: \${SONAR_HOST_URL}"
+            echo "Scanner home: ${scannerHome}"
+
+            "${scannerHome}/bin/sonar-scanner" \
+              -Dsonar.projectKey=team9-syslogs \
+              -Dsonar.projectName=team9-syslogs \
+              -Dsonar.sources=roles/python_app,tools \
+              -Dsonar.inclusions=**/*.py,**/*.yml,**/*.yaml,**/*.j2 \
+              -Dsonar.exclusions=**/.venv/**,**/venv/**,**/.scannerwork/**,**/.git/**,**/__pycache__/**,**/*.egg-info/**,**/.history/**,.history/** \
+              -Dsonar.python.coverage.reportPaths=coverage.xml \
+              -Dsonar.secrets.enabled=false \
+              -Dsonar.scm.disabled=true \
+              -Dsonar.scanner.skipSystemTruststore=true
+          """
         }
       }
     }
-
+  }
+}
+/* -------quality gate check --------*/
     stage('Quality Gate') {
       steps {
         timeout(time: 10, unit: 'MINUTES') {
@@ -226,7 +254,7 @@ BASH
         }
       }
     }
-
+/* ----end stages -----*/
   } // stages
 
   post {
