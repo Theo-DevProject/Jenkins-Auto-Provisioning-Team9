@@ -1,0 +1,11 @@
+# group_vars/all.yml
+
+# --- Database variables ---
+mysql_root_password: "SecureRootPass123"
+db_name: "syslogs"
+db_user: "devops"
+db_password: "DevOpsPass456"
+
+# --- Jenkins / Java variables ---
+java_pkg_debian: "openjdk-17-jdk"
+jenkins_http_port: 8080

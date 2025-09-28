@@ -1,0 +1,9 @@
+# group_vars/all.yml
+mysql_host: "172.31.25.138"   # MySQL private IP
+db_name: "syslogs"
+db_user: "devops"
+db_password: "DevOpsPass456"
+
+# optional flags we used earlier
+skip_mysql_install: true       # we already installed/started MariaDB manually
+mysql_root_password: "SecureRootPass123"   # only used if you wire root tasks

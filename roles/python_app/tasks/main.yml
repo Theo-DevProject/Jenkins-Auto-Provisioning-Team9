@@ -1,129 +1,137 @@
 ---
 # roles/python_app/tasks/main.yml
 
-# --- Base Python setup --------------------------------------------------------
-- name: Ensure Python + tools (Debian/Ubuntu)
-  apt:
-    name:
-      - python3
-      - python3-venv
-      - python3-pip
-    state: present
-    update_cache: yes
-  when: ansible_os_family == "Debian"
-
-- name: Ensure Python + tools (RedHat/Amazon)
-  yum:
+# 1) Base Python tools (cross-distro)
+- name: Ensure Python and pip are present
+  package:
     name:
       - python3
       - python3-pip
     state: present
-  when: ansible_os_family in ["RedHat", "Amazon"]
+  become: true
 
-# --- App directory & agent ----------------------------------------------------
-- name: Create application directory
+# 2) Install virtualenv via pip (avoid distro-specific *-venv packages)
+- name: Install virtualenv (system-wide)
+  pip:
+    name: virtualenv
+    executable: pip3
+    state: present
+  become: true
+
+# 3) App directory
+- name: Ensure app directory exists
   file:
     path: /opt/system-monitor
     state: directory
-    mode: "0755"
+    mode: '0755'
+  become: true
 
-- name: Copy Python script (metrics agent)
+# 4) App sources
+- name: Copy metrics agent (log_stats.py)
   copy:
     src: log_stats.py
     dest: /opt/system-monitor/log_stats.py
-    mode: "0755"
+    mode: '0755'
+  become: true
 
 - name: Copy requirements file
   copy:
     src: requirements.txt
     dest: /opt/system-monitor/requirements.txt
-    mode: "0644"
+    mode: '0644'
+  become: true
 
-- name: Create Python virtual environment & install deps
-  shell: |
-    set -e
-    test -d /opt/system-monitor/venv || python3 -m venv /opt/system-monitor/venv
-    /opt/system-monitor/venv/bin/pip install --upgrade pip
-    /opt/system-monitor/venv/bin/pip install -r /opt/system-monitor/requirements.txt
+# 5) Create venv using virtualenv (works everywhere)
+- name: Create Python virtual environment
+  command: python3 -m virtualenv /opt/system-monitor/venv
   args:
     creates: /opt/system-monitor/venv/bin/activate
+  become: true
 
-- name: Create environment file
-  copy:
+# 6) Install deps into the venv (idempotent)
+- name: Upgrade pip in venv
+  pip:
+    name: pip
+    state: latest
+    virtualenv: /opt/system-monitor/venv
+  become: true
+
+- name: Install requirements into venv
+  pip:
+    requirements: /opt/system-monitor/requirements.txt
+    virtualenv: /opt/system-monitor/venv
+    state: present
+  become: true
+
+# Optional hardening: make sure these are there regardless of the requirements file
+- name: Ensure Flask + PyMySQL + Matplotlib present in venv
+  pip:
+    name:
+      - Flask
+      - PyMySQL
+      - matplotlib
+    virtualenv: /opt/system-monitor/venv
+    state: present
+  become: true
+
+# 7) Runtime configuration + service
+- name: Write /opt/system-monitor/.env (from group vars)
+  template:
+    src: env_vars.j2
     dest: /opt/system-monitor/.env
-    mode: "0644"
-    content: |
-      DB_HOST={{ mysql_host }}
-      DB_USER={{ db_user }}
-      DB_PASS={{ db_password }}
-      DB_NAME={{ db_name }}
+    mode: '0644'
+  become: true
 
-# --- system-monitor service + timer ------------------------------------------
-- name: Create systemd service file (system-monitor)
-  copy:
-    dest: /etc/systemd/system/system-monitor.service
-    mode: "0644"
-    content: |
-      [Unit]
-      Description=System Monitor Service
-      After=network.target
+# --- UI assets for the interactive dashboard ---
 
-      [Service]
-      Type=oneshot
-      EnvironmentFile=/opt/system-monitor/.env
-      ExecStart=/opt/system-monitor/venv/bin/python /opt/system-monitor/log_stats.py
+# Create template/static dirs BEFORE copying files
+- name: Ensure Flask template/static directories exist
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - /opt/system-monitor/templates
+    - /opt/system-monitor/static
+  become: true
 
-      [Install]
-      WantedBy=multi-user.target
-  notify: Daemon reload
-
-- name: Create systemd timer file (system-monitor)
-  copy:
-    dest: /etc/systemd/system/system-monitor.timer
-    mode: "0644"
-    content: |
-      [Unit]
-      Description=Run system-monitor every 5 minutes
-
-      [Timer]
-      OnBootSec=30s
-      OnUnitActiveSec=5min
-      Unit=system-monitor.service
-
-      [Install]
-      WantedBy=timers.target
-  notify:
-    - Daemon reload
-    - Enable & start system-monitor timer
-
-# --- SQL console deployment ---------------------------------------------------
-# Place the source file at: roles/python_app/files/sql_console.py
+# Copy Flask app (choose the final combined console+dashboard file)
 - name: Copy sql_console.py
   copy:
     src: sql_console.py
     dest: /opt/system-monitor/sql_console.py
-    mode: "0755"
+    mode: '0755'
+  become: true
 
-- name: Install Flask + PyMySQL in venv (for console)
-  shell: |
-    set -e
-    /opt/system-monitor/venv/bin/pip install Flask PyMySQL
-  args:
-    creates: /opt/system-monitor/venv/bin/flask
+# Dashboard template (Jinja not required; plain HTML is fine)
+- name: Copy dashboard template
+  copy:
+    src: templates/dashboard.html           # from roles/python_app/files/templates/dashboard.html
+    dest: /opt/system-monitor/templates/dashboard.html
+    mode: '0644'
+  become: true
 
-# Template file should be at: roles/python_app/templates/sql-console.service.j2
+# Client-side JS
+- name: Copy dashboard JS
+  copy:
+    src: static/app.js                      # from roles/python_app/files/static/app.js
+    dest: /opt/system-monitor/static/app.js
+    mode: '0644'
+  become: true
+
+# Systemd unit (expects EnvironmentFile=/opt/system-monitor/.env and ExecStart to use venv python)
 - name: Install systemd unit for SQL console
   template:
     src: sql-console.service.j2
     dest: /etc/systemd/system/sql-console.service
-    mode: "0644"
-  notify: Daemon reload
+    mode: '0644'
+  become: true
 
-# Avoid missing-handler problems; manage service directly here.
-- name: Unmask, enable & start sql-console
-  ansible.builtin.systemd:
+# 8) Start / restart the service (single place)
+- name: Unmask, enable & restart sql-console
+  systemd:
     name: sql-console
-    masked: no
-    enabled: yes
-    state: started
-    daemon_reload: yes
+    enabled: true
+    state: restarted
+    daemon_reload: true
+  become: true

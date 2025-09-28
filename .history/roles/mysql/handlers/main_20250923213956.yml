@@ -1,0 +1,7 @@
+---
+- name: restart mysql
+  service:
+    name: >-
+      {{ (ansible_distribution == 'Amazon') | ternary('mariadb',
+         (ansible_os_family == 'Debian') | ternary('mysql', 'mariadb')) }}
+    state: restarted

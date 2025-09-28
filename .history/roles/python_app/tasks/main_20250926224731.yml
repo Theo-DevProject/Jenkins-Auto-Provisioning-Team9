@@ -1,0 +1,101 @@
+---
+# roles/python_app/tasks/main.yml
+
+- name: Ensure Python + tools (Debian/Ubuntu)
+  apt:
+    name:
+      - python3
+      - python3-venv
+      - python3-pip
+    state: present
+    update_cache: yes
+  when: ansible_os_family == "Debian"
+
+- name: Ensure Python + tools (RedHat/Amazon)
+  yum:
+    name:
+      - python3
+      - python3-pip
+    state: present
+  when: ansible_os_family in ["RedHat", "Amazon"]
+
+# --- App directory & agent ----------------------------------------------------
+- name: Ensure app directory exists
+  file:
+    path: /opt/system-monitor
+    state: directory
+    mode: "0755"
+
+- name: Copy metrics agent (if you use it)
+  copy:
+    src: log_stats.py
+    dest: /opt/system-monitor/log_stats.py
+    mode: "0755"
+
+- name: Copy requirements file
+  copy:
+    src: requirements.txt
+    dest: /opt/system-monitor/requirements.txt
+    mode: "0644"
+
+- name: Create Python virtual environment & install deps
+  shell: |
+    set -e
+    test -d /opt/system-monitor/venv || python3 -m venv /opt/system-monitor/venv
+    /opt/system-monitor/venv/bin/pip install --upgrade pip
+    /opt/system-monitor/venv/bin/pip install -r /opt/system-monitor/requirements.txt
+  args:
+    creates: /opt/system-monitor/venv/bin/activate
+
+- name: Write /opt/system-monitor/.env (from group vars)
+  copy:
+    dest: /opt/system-monitor/.env
+    mode: "0600"
+    owner: root
+    group: root
+    content: |
+      DB_HOST={{ mysql_host }}
+      DB_USER={{ db_user }}
+      DB_PASS={{ db_password }}
+      DB_NAME={{ db_name }}
+  notify: Restart sql-console
+
+# --- SQL console deployment ---------------------------------------------------
+- name: Copy sql_console.py
+  copy:
+    src: sql_console.py
+    dest: /opt/system-monitor/sql_console.py
+    mode: "0755"
+
+- name: Install Flask + PyMySQL in venv (for console)
+  shell: |
+    set -e
+    /opt/system-monitor/venv/bin/pip install Flask PyMySQL matplotlib
+  args:
+    creates: /opt/system-monitor/venv/bin/flask
+
+- name: Install systemd unit for SQL console
+  template:
+    src: sql-console.service.j2
+    dest: /etc/systemd/system/sql-console.service
+    mode: "0644"
+  notify: Daemon reload
+
+- name: Unmask, enable & start sql-console
+  systemd:
+    name: sql-console
+    masked: no
+    enabled: yes
+    state: started
+    daemon_reload: yes
+
+# Handlers (inline for simplicity)
+- name: Daemon reload
+  systemd:
+    daemon_reload: yes
+
+- name: Restart sql-console
+  systemd:
+    name: sql-console
+    state: restarted
+    enabled: yes

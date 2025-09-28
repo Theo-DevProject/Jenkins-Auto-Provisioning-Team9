@@ -1,0 +1,77 @@
+---
+# Deploy MySQL (schema/user), App (agent + Flask console), Jenkins base
+
+- name: Deploy MySQL Database
+  hosts: mysql_servers
+  become: yes
+  vars:
+    db_user: "{{ db_user | default('devops') }}"
+    db_password: "{{ db_password | default('DevOpsPass456') }}"
+    db_name: "{{ db_name | default('syslogs') }}"
+  tasks:
+    - name: Ensure MySQL server is present (Amazon Linux/RHEL)
+      yum:
+        name: mariadb-server
+        state: present
+      when: ansible_os_family in ["RedHat", "Amazon"]
+
+    - name: Ensure MySQL server is present (Debian/Ubuntu)
+      apt:
+        name: [mysql-server]
+        state: present
+        update_cache: yes
+      when: ansible_os_family == "Debian"
+
+    - name: Start & enable mysqld
+      service:
+        name: "{{ 'mariadb' if ansible_os_family in ['RedHat','Amazon'] else 'mysql' }}"
+        state: started
+        enabled: yes
+
+    - name: Create database
+      community.mysql.mysql_db:
+        name: "{{ db_name }}"
+        state: present
+
+    - name: Create application user
+      community.mysql.mysql_user:
+        name: "{{ db_user }}"
+        password: "{{ db_password }}"
+        priv: "{{ db_name }}.*:ALL"
+        host: "%"
+        state: present
+
+    - name: Load initial schema/seed (idempotent)
+      community.mysql.mysql_query:
+        login_user: root
+        login_password: ""
+        query: "{{ lookup('file', 'init_db.sql') }}"
+      register: schema_load
+      failed_when: false
+
+- name: Deploy Python Application
+  hosts: app_servers
+  become: yes
+  vars:
+    mysql_host: "{{ mysql_host | default('98.89.79.137') }}"
+    db_user: "{{ db_user | default('devops') }}"
+    db_password: "{{ db_password | default('DevOpsPass456') }}"
+    db_name: "{{ db_name | default('syslogs') }}"
+  roles:
+    - role: python_app
+
+- name: Prepare Jenkins master (lightweight)
+  hosts: jenkins_master
+  become: yes
+  tasks:
+    - name: Ensure basic tools
+      apt:
+        name: [git, curl]
+        state: present
+        update_cache: yes
+      when: ansible_os_family == "Debian"
+    - name: Ensure basic tools (Amazon/RHEL)
+      yum:
+        name: [git, curl]
+        state: present
+      when: ansible_os_family in ["RedHat","Amazon"]

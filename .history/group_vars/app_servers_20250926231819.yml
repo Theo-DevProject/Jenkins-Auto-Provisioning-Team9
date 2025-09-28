@@ -1,0 +1,2 @@
+# Point the app at the DB Elastic IP
+mysql_host: "172.31.25.138"
