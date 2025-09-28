@@ -3,16 +3,18 @@ pipeline {
 
   options {
     timestamps()
-    // Prevent overlapping runs: a new one aborts the previous
     disableConcurrentBuilds(abortPrevious: true)
     buildDiscarder(logRotator(numToKeepStr: '20'))
-    // Hard cap for the whole pipeline
     timeout(time: 30, unit: 'MINUTES')
   }
 
   parameters {
-    // Leave empty to skip public probe; paste http://<public-ip>:8082 when ready
-    string(name: 'APP_URL', defaultValue: '', description: 'Public URL for SQL console (optional)')
+    // Default to your Elastic IP so the pipeline always probes it
+    string(
+      name: 'APP_URL',
+      defaultValue: 'http://3.223.42.1:8082',
+      description: 'Public URL for SQL console (Elastic IP)'
+    )
   }
 
   environment {
@@ -79,19 +81,19 @@ pipeline {
 /usr/bin/env bash <<'BASH'
 set -euo pipefail
 
-PUB_URL="${APP_URL:-}"                  # build parameter (may be empty)
+PUB_URL="${APP_URL:-}"                  # build parameter (Elastic IP by default)
 PRIV_URL="${APP_URL_PRIVATE}"
 
-# probe private first, then public if provided
-URLS="$PRIV_URL"
-[ -n "$PUB_URL" ] && URLS="$URLS $PUB_URL"
+# probe PUBLIC first, then PRIVATE as fallback
+URLS="$PUB_URL $PRIV_URL"
 
-echo "Probing (private first): $URLS"
+echo "Probing (public then private): $URLS"
 
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY
 export no_proxy='*' NO_PROXY='*'
 
 for url in $URLS; do
+  [ -z "$url" ] && continue
   echo "Probing ${url} ..."
   host_port=${url#http://}; host=${host_port%:*}; port=${host_port##*:}
 
@@ -101,13 +103,15 @@ for url in $URLS; do
     echo "TCP $host:$port is NOT reachable (timeout)"
   fi
 
-  tries=10; [ "$url" = "$PUB_URL" ] && tries=5
+  # 10 tries for public, 10 for private (fast exit on 200)
+  tries=10
   for i in $(seq 1 $tries); do
     code=$(curl -4 -sS -o /dev/null --connect-timeout 3 --max-time 5 \
                --noproxy '*' --proxy '' -w '%{http_code}' "$url" || true)
     echo "Attempt $i/$tries -> $url returned HTTP $code"
     if [ "$code" = "200" ]; then
       echo "OK on $url"
+      echo "$url" > .console_url
       exit 0
     fi
     sleep 2
@@ -118,6 +122,15 @@ echo "ERROR: SQL console not reachable from Jenkins."
 exit 1
 BASH
 '''
+      }
+      post {
+        success {
+          script {
+            def consoleUrl = fileExists('.console_url') ? readFile('.console_url').trim() : params.APP_URL
+            echo "Public console (Elastic IP): ${consoleUrl}"
+            echo "Private console (VPC-only): ${env.APP_URL_PRIVATE}"
+          }
+        }
       }
     }
 
@@ -160,7 +173,6 @@ BASH
         withSonarQubeEnv('SonarQube') {
           script {
             def scannerHome = tool 'sonar-scanner'
-            // Let the scan run longer than default; server can be slow on first use
             timeout(time: 25, unit: 'MINUTES') {
               sh """#!/usr/bin/env bash
                 set -euo pipefail
