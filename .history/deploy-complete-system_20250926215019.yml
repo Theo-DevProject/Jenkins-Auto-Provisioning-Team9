@@ -1,0 +1,55 @@
+---
+# Play 1: DB layer
+- name: Deploy MySQL Database
+  hosts: mysql_servers
+  become: yes
+  tasks:
+    - name: Gather facts
+      setup:
+
+    # ---- Amazon Linux 2023 note ----
+    # Guarded package install (skip on your AL2023 because it's already running)
+    - name: Ensure MySQL server is present (Amazon Linux/RHEL)
+      yum:
+        name: mariadb-server
+        state: present
+      when: not skip_mysql_install | default(false)
+
+    - name: Ensure mysqld is enabled and running
+      ansible.builtin.systemd:
+        name: mariadb
+        state: started
+        enabled: yes
+      ignore_errors: true  # ok if the service name differs when we skipped install
+
+    - name: Create database if not exists
+      community.mysql.mysql_db:
+        name: "{{ db_name }}"
+        state: present
+        login_host: "127.0.0.1"
+      ignore_errors: true
+
+    - name: Ensure dev user exists (local socket or TCP if needed)
+      community.mysql.mysql_user:
+        name: "{{ db_user }}"
+        password: "{{ db_password }}"
+        host: "%"
+        priv: "{{ db_name }}.*:ALL"
+        state: present
+        login_host: "127.0.0.1"
+      ignore_errors: true
+
+    - name: Load schema (idempotent)
+      community.mysql.mysql_query:
+        login_host: "127.0.0.1"
+        query: "{{ lookup('file', 'init_db.sql') }}"
+      register: schema_result
+      changed_when: false
+      ignore_errors: true
+
+# Play 2: App layer
+- name: Deploy Python Application
+  hosts: app_servers
+  become: yes
+  roles:
+    - role: python_app

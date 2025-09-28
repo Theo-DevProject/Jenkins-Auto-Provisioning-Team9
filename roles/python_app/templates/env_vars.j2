@@ -2,3 +2,9 @@ DB_HOST={{ mysql_host }}
 DB_USER={{ db_user }}
 DB_PASS={{ db_password }}
 DB_NAME={{ db_name }}
+
+DEFAULT_QUERY={{ DEFAULT_QUERY | default("SELECT memory_usage, cpu_usage, timestamp FROM stats ORDER BY timestamp DESC LIMIT 100;") }}
+
+# optional tunables for the UI
+REFRESH_MS={{ REFRESH_MS | default(5000) }}
+MAX_POINTS={{ MAX_POINTS | default(120) }}

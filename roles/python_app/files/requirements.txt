@@ -1,2 +1,5 @@
 psutil
 PyMySQL
+Flask
+flask
+pymysql

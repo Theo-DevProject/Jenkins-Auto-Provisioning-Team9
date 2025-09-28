@@ -1,0 +1,10 @@
+[Unit]
+Description=System Monitor Service
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/system-monitor
+EnvironmentFile=/opt/system-monitor/.env
+ExecStart=/opt/system-monitor/venv/bin/python /opt/system-monitor/log_stats.py

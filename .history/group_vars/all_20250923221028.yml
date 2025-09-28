@@ -1,0 +1,4 @@
+mysql_root_password: "SecureRootPass123"
+db_name: "syslogs"
+db_user: "devops"
+db_password: "DevOpsPass456"

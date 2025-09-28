@@ -1,4 +1,11 @@
-mysql_root_password: "SecureRootPass123"
+# Global vars
+mysql_host: "172.31.25.138"   # DB private IP
 db_name: "syslogs"
 db_user: "devops"
 db_password: "DevOpsPass456"
+
+# We already installed/seeded MariaDB by hand
+skip_mysql_install: true
+
+# Only used if you let Ansible manage root creds/files
+mysql_root_password: "SecureRootPass123"

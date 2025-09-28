@@ -1,0 +1,53 @@
+---
+# deploy-complete-system.yml
+
+- name: Deploy MySQL Database
+  hosts: mysql_servers
+  become: yes
+  tasks:
+    - name: Ensure MariaDB server present (Amazon Linux/RHEL)
+      yum:
+        name: mariadb-server
+        state: present
+      when:
+        - ansible_os_family in ["RedHat","Amazon"]
+        - not (skip_mysql_install | default(false))
+
+    - name: Ensure MariaDB running and enabled
+      systemd:
+        name: mariadb
+        state: started
+        enabled: yes
+
+    # Bind to all interfaces (you already have zz-bind.cnf, but keep this safe)
+    - name: Allow remote connections (bind-address=0.0.0.0)
+      copy:
+        dest: /etc/my.cnf.d/zz-bind.cnf
+        mode: "0644"
+        content: |
+          [mysqld]
+          bind-address=0.0.0.0
+      notify: Restart mariadb
+
+  handlers:
+    - name: Restart mariadb
+      systemd:
+        name: mariadb
+        state: restarted
+
+- name: Deploy Python Application
+  hosts: app_servers
+  become: yes
+  roles:
+    - python_app
+
+- name: Prepare Jenkins (optional; if you have a jenkins role)
+  hosts: jenkins_master
+  become: yes
+  tasks:
+    - name: Ensure basic deps
+      apt:
+        name: [ git, python3, python3-pip, unzip ]
+        state: present
+        update_cache: yes
+      when: ansible_os_family == "Debian"

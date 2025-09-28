@@ -1,13 +1,28 @@
 pipeline {
   agent any
-  options { timestamps() }
+
+  options {
+    timestamps()
+    disableConcurrentBuilds(abortPrevious: true)
+    buildDiscarder(logRotator(numToKeepStr: '20'))
+    timeout(time: 30, unit: 'MINUTES')
+  }
+
+  parameters {
+    // Default to Elastic IP so public probe is preferred
+    string(
+      name: 'APP_URL',
+      defaultValue: 'http://3.223.42.1:8082',
+      description: 'Public URL for SQL console (Elastic IP)'
+    )
+  }
 
   environment {
     INVENTORY = "inventory.ini"
     PLAYBOOK  = "deploy-complete-system.yml"
 
-    // SQL console endpoint (public URL)
-    APP_URL   = "http://54.210.34.76:8082"
+    // Private URL (reachable from Jenkins over VPC)
+    APP_URL_PRIVATE = "http://172.31.16.135:8082"
 
     // DB connection for the snapshot script
     DB_HOST = "172.31.25.138"
@@ -15,11 +30,11 @@ pipeline {
     DB_PASS = "DevOpsPass456"
     DB_NAME = "syslogs"
 
-    // how many recent rows to pull for the CSV/PNG
     POINTS = "120"
   }
 
   stages {
+
     stage('Checkout') {
       steps { checkout scm }
     }
@@ -61,55 +76,61 @@ pipeline {
       }
     }
 
-    stage('Smoke test: SQL console up') {
+    stage('Smoke test: UI & API (public EIP preferred)') {
       steps {
-        // NOTE: no 'shell:' key here; we invoke bash ourselves via heredoc.
         sh '''
 /usr/bin/env bash <<'BASH'
 set -euo pipefail
 
-# Public first; private is optional/best-effort
-URLS="${APP_URL} http://172.31.16.135:8082"
-echo "Probing (public first): $URLS"
+PUB_URL="${APP_URL:-}"                  # elastic IP by default (pipeline param)
+PRIV_URL="${APP_URL_PRIVATE}"
 
-# absolutely no proxies
+# probe PUBLIC first, then PRIVATE as fallback
+URLS="$PUB_URL $PRIV_URL"
+
+echo "Probing (public then private): $URLS"
+
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY
 export no_proxy='*' NO_PROXY='*'
 
 for url in $URLS; do
+  [ -z "$url" ] && continue
   echo "Probing ${url} ..."
   host_port=${url#http://}; host=${host_port%:*}; port=${host_port##*:}
 
-  # fewer tries if RFC1918 (likely unreachable from Jenkins if on a different subnet)
-  tries=3
-  if [[ ! $host =~ ^(10\\.|172\\.(1[6-9]|2[0-9]|3[0-1])\\.|192\\.168\\.)$ ]]; then
-    tries=10
-  fi
-
-  # raw TCP reachability (fast hint)
   if timeout 5 bash -lc ":</dev/tcp/$host/$port"; then
     echo "TCP $host:$port is reachable"
   else
     echo "TCP $host:$port is NOT reachable (timeout)"
   fi
 
-  # HTTP probe
-  for i in $(seq 1 $tries); do
+  # up to 10 tries; fast-exit on HTTP 200
+  for i in $(seq 1 10); do
     code=$(curl -4 -sS -o /dev/null --connect-timeout 3 --max-time 5 \
                --noproxy '*' --proxy '' -w '%{http_code}' "$url" || true)
-    echo "Attempt $i/$tries -> $url returned HTTP $code"
+    echo "Attempt $i/10 -> $url returned HTTP $code"
     if [ "$code" = "200" ]; then
       echo "OK on $url"
+      echo "$url" > .console_url
       exit 0
     fi
     sleep 2
   done
 done
 
-echo "ERROR: SQL console not reachable from Jenkins (public nor private)."
+echo "ERROR: SQL console not reachable from Jenkins."
 exit 1
 BASH
 '''
+      }
+      post {
+        success {
+          script {
+            def consoleUrl = fileExists('.console_url') ? readFile('.console_url').trim() : params.APP_URL
+            echo "✅ Console URL in use: ${consoleUrl}"
+            echo "🔒 Private fallback (VPC-only): ${env.APP_URL_PRIVATE}"
+          }
+        }
       }
     }
 
@@ -117,23 +138,96 @@ BASH
       steps {
         sh '''
           set -e
-          python3 -m venv .venv
-          . .venv/bin/activate
+          python3 -m venv .venv || true
+          . .venv/bin/activate || true
           pip install --upgrade pip
           pip install pymysql matplotlib
 
           rm -rf artifacts && mkdir -p artifacts
           DB_HOST="${DB_HOST}" DB_USER="${DB_USER}" DB_PASS="${DB_PASS}" \
           DB_NAME="${DB_NAME}" POINTS="${POINTS}" \
-          .venv/bin/python tools/snapshot.py
+          python tools/snapshot.py
 
-          # copy with build number stamp (best-effort)
           cp artifacts/stats_snapshot.csv "artifacts/stats_snapshot_${BUILD_NUMBER}.csv" || true
           cp artifacts/stats_last_hour.png "artifacts/stats_last_${BUILD_NUMBER}.png" || true
         '''
       }
     }
+
+    /* ---------- SonarQube ---------- */
+
+    stage('Setup SonarScanner (no Docker)') {
+      steps {
+        script {
+          def scannerHome = tool 'sonar-scanner'
+          sh """
+            echo "Scanner home: ${scannerHome}"
+            test -x "${scannerHome}/bin/sonar-scanner"
+          """
+        }
+      }
+    }
+
+/* ---------------sonarqube scane ---------*/
+stage('SonarQube Scan') {
+  steps {
+    withSonarQubeEnv('SonarQube') {
+      script {
+        def scannerHome = tool 'sonar-scanner'
+        timeout(time: 25, unit: 'MINUTES') {
+          sh """#!/usr/bin/env bash
+            set -euo pipefail
+            echo "Using SonarQube at: \${SONAR_HOST_URL}"
+            echo "Scanner home: ${scannerHome}"
+
+            "${scannerHome}/bin/sonar-scanner" \
+              -Dsonar.projectKey=team9-syslogs \
+              -Dsonar.projectName=team9-syslogs \
+              -Dsonar.sources=roles/python_app,tools \
+              -Dsonar.inclusions=**/*.py,**/*.yml,**/*.yaml,**/*.j2 \
+              -Dsonar.exclusions=**/.venv/**,**/venv/**,**/.scannerwork/**,**/.git/**,**/__pycache__/**,**/*.egg-info/**,**/.history/**,.history/** \
+              -Dsonar.python.coverage.reportPaths=coverage.xml \
+              -Dsonar.secrets.enabled=false \
+              -Dsonar.scm.disabled=true \
+              -Dsonar.scanner.skipSystemTruststore=true
+          """
+        }
+      }
+    }
   }
+}
+// -------quality gate check --------*
+stage('Quality Gate') {
+  steps {
+    timeout(time: 10, unit: 'MINUTES') {
+      script {
+        // Non-blocking: do NOT abort the pipeline
+        def qg = waitForQualityGate abortPipeline: false
+        echo "Quality Gate status: ${qg.status}"  // OK / WARN / ERROR / NONE
+        // If you still want a soft fail marker, uncomment next line:
+        // if (qg.status == 'ERROR') currentBuild.result = 'UNSTABLE'
+      }
+    }
+  }
+  post {
+    always {
+      script {
+        def url = ''
+        if (fileExists('.scannerwork/report-task.txt')) {
+          def rt = readFile '.scannerwork/report-task.txt'
+          url = (rt.readLines().find { it.startsWith('dashboardUrl=') } ?: '')
+                .replace('dashboardUrl=','')
+        }
+        echo url ? "SonarQube dashboard: ${url}" :
+                   "Could not find dashboardUrl in report-task.txt"
+      }
+      archiveArtifacts artifacts: '.scannerwork/report-task.txt', allowEmptyArchive: true
+    }
+  }
+}
+// ----end stages -----
+    
+  } // stages
 
   post {
     always {

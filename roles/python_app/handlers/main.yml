@@ -1,17 +1,17 @@
 ---
-# Runs when unit files change
 - name: Daemon reload
   ansible.builtin.systemd:
     daemon_reload: yes
 
-- name: Enable & start system-monitor timer
+- name: Restart sql-console
+  ansible.builtin.systemd:
+    name: sql-console
+    state: restarted
+    enabled: yes
+    daemon_reload: yes
+
+- name: Enable system-monitor timer
   ansible.builtin.systemd:
     name: system-monitor.timer
-    enabled: true
     state: started
-
-- name: Enable & start sql-console
-  ansible.builtin.systemd:
-    name: sql-console.service
-    enabled: true
-    state: started
+    enabled: yes
