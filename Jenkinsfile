@@ -147,7 +147,7 @@ BASH
       }
     }
 
-stage('SonarQube Scan') {
+  stage('SonarQube Scan') {
   steps {
     withSonarQubeEnv('SonarQube') {
       script {
@@ -156,7 +156,7 @@ stage('SonarQube Scan') {
           sh """#!/usr/bin/env bash
             set -euo pipefail
             echo "Using SonarQube at: \${SONAR_HOST_URL}"
-            "${scannerHome}/bin/sonar-scanner" -Dsonar.scanner.skipSystemTruststore=true
+            "${scannerHome}/bin/sonar-scanner"
           """
         }
       }
