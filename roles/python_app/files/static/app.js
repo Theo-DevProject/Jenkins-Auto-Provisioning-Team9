@@ -1,4 +1,7 @@
 (function () {
+  // NEW: read the refresh interval from the HTML data attribute
+  const REFRESH_MS = Number(document.body.dataset.refreshMs || 2000);
+
   const sqlBox = document.getElementById('sqlBox');
   const runBtn = document.getElementById('runBtn');
   const liveChk = document.getElementById('liveChk');
@@ -7,9 +10,13 @@
   const kpiCpu = document.getElementById('kpiCpu');
   const table = document.getElementById('resultTable');
   const rowsCount = document.getElementById('rowsCount');
+  const refreshLabel = document.getElementById('refreshLabel');
 
   let lastSQL = sqlBox.value.trim();
   let timer = null;
+
+  // show the effective refresh rate
+  if (refreshLabel) refreshLabel.textContent = REFRESH_MS;
 
   // Chart.js line with 2 datasets
   const ctx = document.getElementById('chart').getContext('2d');
@@ -35,7 +42,6 @@
   }
 
   function toTimeLabel(v) {
-    // try timestamp column if present
     try {
       const d = new Date(v);
       if (!isNaN(d.getTime())) return d.toLocaleTimeString();
@@ -58,7 +64,6 @@
   }
 
   function updateChart(columns, rows) {
-    // find likely column names
     const memCol = columns.find(c => c.toLowerCase().includes('memory'));
     const cpuCol = columns.find(c => c.toLowerCase().includes('cpu'));
     const tsCol  = columns.find(c => c.toLowerCase().includes('time')) || columns[0];
@@ -85,7 +90,7 @@
       if (!res.ok) throw new Error(data.error || res.statusText);
 
       lastSQL = data.sql;
-      if (userInitiated) sqlBox.value = lastSQL; // normalize spaces/casing
+      if (userInitiated) sqlBox.value = lastSQL;
 
       renderTable(data.columns, data.rows);
       updateKpis(data.summary);
@@ -100,10 +105,10 @@
     runQuery(sqlBox.value.trim(), true);
   });
 
-  // live refresh the **last** SQL (the one you ran)
   function startTimer() {
     if (timer) clearInterval(timer);
-    timer = setInterval(() => runQuery(lastSQL, false), 2000); // refresh every 2s
+    // NEW: use REFRESH_MS rather than a hard-coded 5000
+    timer = setInterval(() => runQuery(lastSQL, false), REFRESH_MS);
   }
   function stopTimer() {
     if (timer) clearInterval(timer);
