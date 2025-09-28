@@ -3,19 +3,15 @@ pipeline {
   options { timestamps() }
 
   tools {
-    // Name must match Manage Jenkins → Tools (Temurin 17 you added)
-    jdk 'jdk17'
+    jdk 'jdk17' // Manage Jenkins → Tools
   }
 
   environment {
-    // Jenkins → Tools → SonarQube Scanner: name must be 'sonar-scanner'
-    SCANNER_HOME = tool 'sonar-scanner'
-    // (Optional) give the scanner more heap if needed
+    SCANNER_HOME = tool 'sonar-scanner'      // Manage Jenkins → Tools
     SONAR_SCANNER_OPTS = '-Xmx512m'
-    // Your existing env
     INVENTORY = 'inventory.ini'
     PLAYBOOK  = 'deploy-complete-system.yml'
-    APP_URL   = 'http://54.210.34.76:8082'
+    APP_URL   = 'http://54.210.34.76:8082'   // public; OK if it times out but private succeeds
     DB_HOST = '172.31.25.138'
     DB_USER = 'devops'
     DB_PASS = 'DevOpsPass456'
@@ -115,15 +111,15 @@ BASH
       steps {
         sh '''
           set -e
-          python3 -m venv .venv
-          . .venv/bin/activate
+          python3 -m venv .venv || true
+          . .venv/bin/activate || true
           pip install --upgrade pip
           pip install pymysql matplotlib
 
           rm -rf artifacts && mkdir -p artifacts
           DB_HOST="${DB_HOST}" DB_USER="${DB_USER}" DB_PASS="${DB_PASS}" \
           DB_NAME="${DB_NAME}" POINTS="${POINTS}" \
-          .venv/bin/python tools/snapshot.py
+          python tools/snapshot.py
 
           cp artifacts/stats_snapshot.csv "artifacts/stats_snapshot_${BUILD_NUMBER}.csv" || true
           cp artifacts/stats_last_hour.png "artifacts/stats_last_${BUILD_NUMBER}.png" || true
@@ -147,9 +143,8 @@ BASH
 
     stage('SonarQube Scan') {
       steps {
-        ansiColor('xterm') {
-          withSonarQubeEnv('SonarQube') {
-            sh '''
+        withSonarQubeEnv('SonarQube') {
+          sh '''
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
@@ -168,7 +163,6 @@ fi
 echo "---- report-task.txt ----"
 cat .scannerwork/report-task.txt || true
 '''
-          }
         }
       }
     }
@@ -187,11 +181,7 @@ cat .scannerwork/report-task.txt || true
               def lines = readFile('.scannerwork/report-task.txt').readLines()
               url = (lines.find { it.startsWith('dashboardUrl=') } ?: '').replace('dashboardUrl=','')
             }
-            if (url) {
-              echo "SonarQube dashboard: ${url}"
-            } else {
-              echo 'Could not find dashboardUrl in report-task.txt'
-            }
+            echo url ? "SonarQube dashboard: ${url}" : 'Could not find dashboardUrl in report-task.txt'
           }
           archiveArtifacts artifacts: '.scannerwork/report-task.txt', allowEmptyArchive: true
         }
