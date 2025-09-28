@@ -1,3 +1,4 @@
+---
 # roles/python_app/tasks/main.yml
 
 # 1) Base Python tools (cross-distro)
@@ -62,7 +63,7 @@
     state: present
   become: true
 
-# (Optional) keep if these aren’t inside requirements.txt
+# Optional hardening: make sure these are there regardless of the requirements file
 - name: Ensure Flask + PyMySQL + Matplotlib present in venv
   pip:
     name:
@@ -81,28 +82,9 @@
     mode: '0644'
   become: true
 
-- name: Copy sql_console.py
-  copy:
-    src: sql_console.py
-    dest: /opt/system-monitor/sql_console.py
-    mode: '0755'
-  become: true
+# --- UI assets for the interactive dashboard ---
 
-- name: Install systemd unit for SQL console
-  template:
-    src: sql-console.service.j2
-    dest: /etc/systemd/system/sql-console.service
-    mode: '0644'
-  become: true
-
-- name: Unmask, enable & start sql-console
-  systemd:
-    name: sql-console
-    enabled: true
-    state: started
-    daemon_reload: true
-  become: true
-  
+# Create template/static dirs BEFORE copying files
 - name: Ensure Flask template/static directories exist
   file:
     path: "{{ item }}"
@@ -111,22 +93,45 @@
   loop:
     - /opt/system-monitor/templates
     - /opt/system-monitor/static
+  become: true
 
+# Copy Flask app (choose the final combined console+dashboard file)
+- name: Copy sql_console.py
+  copy:
+    src: sql_console.py
+    dest: /opt/system-monitor/sql_console.py
+    mode: '0755'
+  become: true
+
+# Dashboard template (Jinja not required; plain HTML is fine)
 - name: Copy dashboard template
   copy:
-    src: templates/dashboard.html
+    src: templates/dashboard.html           # from roles/python_app/files/templates/dashboard.html
     dest: /opt/system-monitor/templates/dashboard.html
     mode: '0644'
+  become: true
 
+# Client-side JS
 - name: Copy dashboard JS
   copy:
-    src: static/app.js
+    src: static/app.js                      # from roles/python_app/files/static/app.js
     dest: /opt/system-monitor/static/app.js
     mode: '0644'
+  become: true
 
-# (re)start the service to pick up new UI
-- name: Restart sql-console
+# Systemd unit (expects EnvironmentFile=/opt/system-monitor/.env and ExecStart to use venv python)
+- name: Install systemd unit for SQL console
+  template:
+    src: sql-console.service.j2
+    dest: /etc/systemd/system/sql-console.service
+    mode: '0644'
+  become: true
+
+# 8) Start / restart the service (single place)
+- name: Unmask, enable & restart sql-console
   systemd:
     name: sql-console
+    enabled: true
     state: restarted
     daemon_reload: true
+  become: true
