@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>Read-only SQL + Live Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; margin: 16px; }
+    .grid { display: grid; grid-template-columns: 420px 1fr; gap: 16px; }
+    textarea { width: 100%; height: 150px; font-family: ui-monospace, Menlo, monospace; }
+    button { padding: 8px 14px; cursor: pointer; }
+    .cards { display: grid; grid-template-columns: repeat(2, 220px); gap: 12px; margin: 10px 0; }
+    .card { border: 1px solid #e3e3e3; border-radius: 10px; padding: 12px; }
+    .kpi { font-size: 28px; font-weight: 700; }
+    table { border-collapse: collapse; width: 100%; margin-top: 10px; }
+    th, td { border: 1px solid #ddd; padding: 6px 8px; font-size: 14px; }
+    th { background: #f8f8f8; }
+    .row { margin-top: 8px; display: flex; align-items: center; gap: 12px; }
+    .muted { color: #666; font-size: 12px; }
+  </style>
+  <!-- Chart.js (CDN) -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+
+<h2>Read-only SQL Console <span class="muted">(SELECT … LIMIT … only)</span></h2>
+<div class="grid">
+  <!-- Left: query editor -->
+  <section>
+    <textarea id="sqlBox">{{ default_query }}</textarea>
+    <div class="row">
+      <button id="runBtn">Run</button>
+      <label><input type="checkbox" id="liveChk" checked /> Live refresh (5s)</label>
+      <span class="muted" id="status"></span>
+    </div>
+    <div id="rowsCount" class="muted"></div>
+    <div style="max-height: 55vh; overflow:auto;">
+      <table id="resultTable"></table>
+    </div>
+  </section>
+
+  <!-- Right: KPIs + chart -->
+  <section>
+    <div class="cards">
+      <div class="card">
+        <div>Avg Memory Usage</div>
+        <div class="kpi" id="kpiMem">—</div>
+      </div>
+      <div class="card">
+        <div>Avg CPU Usage</div>
+        <div class="kpi" id="kpiCpu">—</div>
+      </div>
+    </div>
+    <canvas id="chart" height="120"></canvas>
+  </section>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
