@@ -102,3 +102,31 @@
     state: started
     daemon_reload: true
   become: true
+  
+- name: Ensure Flask template/static directories exist
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - /opt/system-monitor/templates
+    - /opt/system-monitor/static
+
+- name: Copy dashboard template
+  copy:
+    src: templates/dashboard.html
+    dest: /opt/system-monitor/templates/dashboard.html
+    mode: '0644'
+
+- name: Copy dashboard JS
+  copy:
+    src: static/app.js
+    dest: /opt/system-monitor/static/app.js
+    mode: '0644'
+
+# (re)start the service to pick up new UI
+- name: Restart sql-console
+  systemd:
+    name: sql-console
+    state: restarted
+    daemon_reload: true
