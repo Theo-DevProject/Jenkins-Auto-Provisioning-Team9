@@ -21,7 +21,9 @@
   <!-- Chart.js (CDN) -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
-<body>
+
+<!-- NEW: expose refresh_ms to JS via data attribute -->
+<body data-refresh-ms="{{ refresh_ms|default(2000) }}">
 
 <h2>Read-only SQL Console <span class="muted">(SELECT … LIMIT … only)</span></h2>
 <div class="grid">
@@ -30,9 +32,10 @@
     <textarea id="sqlBox">{{ default_query }}</textarea>
     <div class="row">
       <button id="runBtn">Run</button>
-      <label><input type="checkbox" id="liveChk" checked /> Live refresh (5s)</label>
+      <label><input type="checkbox" id="liveChk" checked /> Live refresh</label>
       <span class="muted" id="status"></span>
     </div>
+    <div class="muted">Refresh: <span id="refreshLabel"></span> ms</div>
     <div id="rowsCount" class="muted"></div>
     <div style="max-height: 55vh; overflow:auto;">
       <table id="resultTable"></table>
