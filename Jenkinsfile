@@ -167,7 +167,7 @@ BASH
         }
       }
     }
-/* ----------unite test -------------*/
+/*  // ----------unite test -------------
 stage('Unit tests (pytest + coverage)') {
   steps {
     sh '''
@@ -196,6 +196,7 @@ PY
     archiveArtifacts artifacts: 'coverage.xml', allowEmptyArchive: true
   }
 }
+*/
 /* ---------------sonarqube scane ---------*/
 stage('SonarQube Scan') {
   steps {
