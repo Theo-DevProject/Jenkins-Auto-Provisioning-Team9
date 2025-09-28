@@ -135,3 +135,13 @@
     state: restarted
     daemon_reload: true
   become: true
+
+- name: Ensure Flask + PyMySQL + Matplotlib present in venv
+  pip:
+    name:
+      - Flask
+      - PyMySQL
+      - matplotlib
+    virtualenv: /opt/system-monitor/venv
+    state: present
+  become: true
