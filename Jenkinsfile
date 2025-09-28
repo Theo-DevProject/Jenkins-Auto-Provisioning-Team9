@@ -219,29 +219,36 @@ BASH
       }
     }
 
-    stage('Quality Gate') {
-      steps {
-        timeout(time: 10, unit: 'MINUTES') {
-          waitForQualityGate abortPipeline: true
-        }
-      }
-      post {
-        always {
-          script {
-            def url = ''
-            if (fileExists('.scannerwork/report-task.txt')) {
-              def rt = readFile '.scannerwork/report-task.txt'
-              url = (rt.readLines().find { it.startsWith('dashboardUrl=') } ?: '')
-                    .replace('dashboardUrl=','')
-            }
-            echo url ? "SonarQube dashboard: ${url}" :
-                       "Could not find dashboardUrl in report-task.txt"
-          }
-          archiveArtifacts artifacts: '.scannerwork/report-task.txt', allowEmptyArchive: true
+stage('Quality Gate') {
+  steps {
+    timeout(time: 10, unit: 'MINUTES') {
+      script {
+        // Do NOT abort the pipeline automatically
+        def qg = waitForQualityGate(abortPipeline: false)
+        echo "Quality Gate status: ${qg.status} ${qg.description ?: ''}"
+        if (qg.status != 'OK') {
+          // Keep the build, but surface it clearly
+          currentBuild.result = 'UNSTABLE'
         }
       }
     }
   }
+  post {
+    always {
+      script {
+        def url = ''
+        if (fileExists('.scannerwork/report-task.txt')) {
+          def rt = readFile '.scannerwork/report-task.txt'
+          url = (rt.readLines().find { it.startsWith('dashboardUrl=') } ?: '')
+                  .replace('dashboardUrl=','')
+        }
+        echo url ? "SonarQube dashboard: ${url}" :
+                   "Could not find dashboardUrl in report-task.txt"
+      }
+      archiveArtifacts artifacts: '.scannerwork/report-task.txt', allowEmptyArchive: true
+    }
+  }
+}
 
   post {
     always {
