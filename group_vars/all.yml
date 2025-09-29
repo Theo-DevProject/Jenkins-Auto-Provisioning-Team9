@@ -1,3 +1,12 @@
+# ips.yml
+ips:
+  app_private_ip: 172.31.16.135   # or whatever your app server’s private IP is
+  app_port: 8082
+  mysql_private_ip: 172.31.25.138
+  mysql_port: 3306
+  jenkins_private_ip: 172.31.30.27
+  jenkins_port: 8080
+
 # Global vars
 mysql_host: "172.31.25.138"   # DB private IP
 db_name: "syslogs"
