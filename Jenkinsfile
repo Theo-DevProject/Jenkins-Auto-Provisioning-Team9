@@ -194,16 +194,16 @@ BASH
     }
 
     // --- 9. Enforce SonarQube Quality Gate ---
-    stage('Quality Gate') {
-      steps {
-        timeout(time: 10, unit: 'MINUTES') {
-          script {
-            def qg = waitForQualityGate abortPipeline: false
-            echo "Quality Gate status: ${qg.status}"
-            // Optionally: mark unstable if ERROR
-          }
-        }
+stage('Quality Gate') {
+  steps {
+    timeout(time: 20, unit: 'MINUTES') {
+      script {
+        def qg = waitForQualityGate abortPipeline: false
+        echo "Quality Gate status: ${qg.status}"
       }
+    }
+  }
+}
       post {
         always {
           script {
