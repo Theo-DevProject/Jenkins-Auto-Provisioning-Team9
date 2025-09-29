@@ -6,5 +6,3 @@ Python Script, MySQL and Jenkins Agent for Auto-Provisioning
 - jenkins-master: Runs Jenkins UI and pipelines
 
 - mysql-server: Hosts MariaDB/MySQL (syslogs DB)
-
------
