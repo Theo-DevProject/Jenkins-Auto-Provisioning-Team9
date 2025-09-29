@@ -203,7 +203,6 @@ stage('Quality Gate') {
       }
     }
   }
-}
       post {
         always {
           script {
