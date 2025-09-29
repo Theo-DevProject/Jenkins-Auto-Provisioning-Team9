@@ -28,22 +28,26 @@ pipeline {
       steps { checkout scm }
     }
 
-    stage('Load IPs') {
-      steps {
-        script {
-          def ips = readJSON text: readFile('ips.json')
-          env.APP_URL         = "http://${ips.app_public_ip}:${ips.app_port}"
-          env.APP_URL_PRIVATE = "http://${ips.app_private_ip}:${ips.app_port}"
-          env.DB_HOST         = ips.db_private_ip
-          env.SONAR_HOST_URL  = ips.sonarqube_host   // informational (withSonarQubeEnv still drives auth)
+stage('Load IPs') {
+  steps {
+    script {
+      // Read JSON once, accept either nested or flat structure
+      def J = readJSON text: readFile('ips.json')
+      def I = (J.ips instanceof Map) ? J.ips : J  // prefer nested .ips, fallback to flat
 
-          echo "APP_URL: ${env.APP_URL}"
-          echo "APP_URL_PRIVATE: ${env.APP_URL_PRIVATE}"
-          echo "DB_HOST: ${env.DB_HOST}"
-          echo "SONAR: ${env.SONAR_HOST_URL}"
-        }
-      }
+      // Build the env vars used later in the pipeline
+      env.APP_URL         = "http://${I.app_public_ip}:${I.app_port}"
+      env.APP_URL_PRIVATE = "http://${I.app_private_ip}:${I.app_port}"
+      env.DB_HOST         = (I.mysql_private_ip ?: I.db_private_ip ?: '')
+      env.SONAR_HOST_URL  = (I.sonarqube_host ?: env.SONAR_HOST_URL)
+
+      echo "APP_URL: ${env.APP_URL}"
+      echo "APP_URL_PRIVATE: ${env.APP_URL_PRIVATE}"
+      echo "DB_HOST: ${env.DB_HOST}"
+      if (env.SONAR_HOST_URL) echo "SONAR: ${env.SONAR_HOST_URL}"
     }
+  }
+}
 
     stage('Install Ansible deps (idempotent)') {
       steps {
