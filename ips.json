@@ -1,0 +1,8 @@
+{
+  "app_public_ip": "3.223.42.1",
+  "app_private_ip": "172.31.16.135",
+  "db_private_ip": "172.31.25.138",
+  "sonarqube_host": "http://18.232.39.51:9000",
+  "app_port": 8082,
+  "mysql_port": 3306
+}
