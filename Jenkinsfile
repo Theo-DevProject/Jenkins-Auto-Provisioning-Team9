@@ -1,54 +1,54 @@
 pipeline {
-  agent any
+  agent any   // Run on any available Jenkins agent
 
   options {
-    timestamps()
-    disableConcurrentBuilds(abortPrevious: true)
-    buildDiscarder(logRotator(numToKeepStr: '20'))
-    timeout(time: 30, unit: 'MINUTES')
+    timestamps()  // Add timestamps to build log
+    disableConcurrentBuilds(abortPrevious: true)  // Prevent overlapping builds
+    buildDiscarder(logRotator(numToKeepStr: '20'))  // Keep only the last 20 builds
+    timeout(time: 30, unit: 'MINUTES')  // Fail the build if it runs too long
   }
 
-  // (Optional) keep param, but it will be overwritten by ips.json
+  // Jenkins parameter (not really needed — overwritten by ips.json later)
   parameters {
     string(name: 'APP_URL', defaultValue: '', description: 'Will be set from ips.json if empty')
   }
 
   environment {
-    INVENTORY = "inventory.ini"
-    PLAYBOOK  = "deploy-complete-system.yml"
-    POINTS    = "120"
-    // These will be set after we load ips.json:
-    // APP_URL
-    // APP_URL_PRIVATE
-    // DB_HOST
+    INVENTORY = "inventory.ini"            // Ansible inventory
+    PLAYBOOK  = "deploy-complete-system.yml" // Ansible playbook entrypoint
+    POINTS    = "120"                      // Number of rows for snapshot.py
+    // These will be injected dynamically from ips.json:
+    // APP_URL, APP_URL_PRIVATE, DB_HOST
   }
 
   stages {
+
+    // --- 1. Checkout source code from GitHub ---
     stage('Checkout') {
       steps { checkout scm }
     }
 
-stage('Load IPs') {
-  steps {
-    script {
-      // Read JSON once, accept either nested or flat structure
-      def J = readJSON text: readFile('ips.json')
-      def I = (J.ips instanceof Map) ? J.ips : J  // prefer nested .ips, fallback to flat
+    // --- 2. Load IPs from ips.json (both public & private) ---
+    stage('Load IPs') {
+      steps {
+        script {
+          def J = readJSON text: readFile('ips.json')
+          def I = (J.ips instanceof Map) ? J.ips : J
 
-      // Build the env vars used later in the pipeline
-      env.APP_URL         = "http://${I.app_public_ip}:${I.app_port}"
-      env.APP_URL_PRIVATE = "http://${I.app_private_ip}:${I.app_port}"
-      env.DB_HOST         = (I.mysql_private_ip ?: I.db_private_ip ?: '')
-      env.SONAR_HOST_URL  = (I.sonarqube_host ?: env.SONAR_HOST_URL)
+          env.APP_URL         = "http://${I.app_public_ip}:${I.app_port}"   // Public app URL
+          env.APP_URL_PRIVATE = "http://${I.app_private_ip}:${I.app_port}" // Private app URL
+          env.DB_HOST         = (I.mysql_private_ip ?: I.db_private_ip ?: '') // DB host
+          env.SONAR_HOST_URL  = (I.sonarqube_host ?: env.SONAR_HOST_URL)     // SonarQube URL
 
-      echo "APP_URL: ${env.APP_URL}"
-      echo "APP_URL_PRIVATE: ${env.APP_URL_PRIVATE}"
-      echo "DB_HOST: ${env.DB_HOST}"
-      if (env.SONAR_HOST_URL) echo "SONAR: ${env.SONAR_HOST_URL}"
+          echo "APP_URL: ${env.APP_URL}"
+          echo "APP_URL_PRIVATE: ${env.APP_URL_PRIVATE}"
+          echo "DB_HOST: ${env.DB_HOST}"
+          if (env.SONAR_HOST_URL) echo "SONAR: ${env.SONAR_HOST_URL}"
+        }
+      }
     }
-  }
-}
 
+    // --- 3. Ensure Ansible + dependencies are installed ---
     stage('Install Ansible deps (idempotent)') {
       steps {
         sh '''
@@ -62,6 +62,7 @@ stage('Load IPs') {
       }
     }
 
+    // --- 4. Run Ansible playbook to configure servers (Jenkins, MySQL, App) ---
     stage('Deploy with Ansible') {
       steps {
         withCredentials([
@@ -76,7 +77,6 @@ stage('Load IPs') {
 
             export ANSIBLE_HOST_KEY_CHECKING=false
 
-            # Pass ips.json to Ansible (so roles can use it)
             ansible-playbook "${PLAYBOOK}" -i "${INVENTORY}" \
               -e ansible_ssh_private_key_file="$SSH_KEY" \
               -e "@ips.json" | tee -a logs/ansible.log
@@ -87,6 +87,7 @@ stage('Load IPs') {
       }
     }
 
+    // --- 5. Smoke test app URLs (public first, fallback private) ---
     stage('Smoke test: UI & API (public EIP preferred)') {
       steps {
         sh '''
@@ -128,6 +129,7 @@ BASH
       }
     }
 
+    // --- 6. Generate CSV + PNG metrics snapshot from DB ---
     stage('Snapshot metrics (CSV + PNG)') {
       steps {
         sh '''
@@ -146,6 +148,7 @@ BASH
       }
     }
 
+    // --- 7. Ensure SonarScanner is available ---
     stage('Setup SonarScanner (no Docker)') {
       steps {
         script {
@@ -158,6 +161,7 @@ BASH
       }
     }
 
+    // --- 8. Run SonarQube scan (Python + YAML) ---
     stage('SonarQube Scan') {
       steps {
         withSonarQubeEnv('SonarQube') {
@@ -184,13 +188,14 @@ BASH
       }
     }
 
+    // --- 9. Enforce SonarQube Quality Gate ---
     stage('Quality Gate') {
       steps {
         timeout(time: 10, unit: 'MINUTES') {
           script {
             def qg = waitForQualityGate abortPipeline: false
             echo "Quality Gate status: ${qg.status}"
-            // optionally: if (qg.status == 'ERROR') currentBuild.result = 'UNSTABLE'
+            // Optionally: mark unstable if ERROR
           }
         }
       }
@@ -212,6 +217,7 @@ BASH
     }
   }
 
+  // --- Always archive logs & artifacts no matter success/fail ---
   post {
     always {
       archiveArtifacts artifacts: 'logs/ansible-*.log, artifacts/**', allowEmptyArchive: true
