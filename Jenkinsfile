@@ -29,24 +29,29 @@ pipeline {
     }
 
     // --- 2. Load IPs from ips.json (both public & private) ---
-    stage('Load IPs') {
-      steps {
-        script {
-          def J = readJSON text: readFile('ips.json')
-          def I = (J.ips instanceof Map) ? J.ips : J
+stage('Load IPs') {
+  steps {
+    script {
+      // Parse ips.json without plugins
+      def txt = readFile('ips.json')
+      def J = new groovy.json.JsonSlurper().parseText(txt)
 
-          env.APP_URL         = "http://${I.app_public_ip}:${I.app_port}"   // Public app URL
-          env.APP_URL_PRIVATE = "http://${I.app_private_ip}:${I.app_port}" // Private app URL
-          env.DB_HOST         = (I.mysql_private_ip ?: I.db_private_ip ?: '') // DB host
-          env.SONAR_HOST_URL  = (I.sonarqube_host ?: env.SONAR_HOST_URL)     // SonarQube URL
+      // Support either nested { "ips": { ... } } or flat { ... }
+      def I = (J instanceof Map && J.ips instanceof Map) ? J.ips : J
 
-          echo "APP_URL: ${env.APP_URL}"
-          echo "APP_URL_PRIVATE: ${env.APP_URL_PRIVATE}"
-          echo "DB_HOST: ${env.DB_HOST}"
-          if (env.SONAR_HOST_URL) echo "SONAR: ${env.SONAR_HOST_URL}"
-        }
-      }
+      // Build env vars for later stages
+      env.APP_URL         = "http://${I.app_public_ip}:${I.app_port}"
+      env.APP_URL_PRIVATE = "http://${I.app_private_ip}:${I.app_port}"
+      env.DB_HOST         = (I.mysql_private_ip ?: I.db_private_ip ?: '')
+      if (I.sonarqube_host) { env.SONAR_HOST_URL = I.sonarqube_host }
+
+      echo "APP_URL: ${env.APP_URL}"
+      echo "APP_URL_PRIVATE: ${env.APP_URL_PRIVATE}"
+      echo "DB_HOST: ${env.DB_HOST}"
+      if (env.SONAR_HOST_URL) echo "SONAR: ${env.SONAR_HOST_URL}"
     }
+  }
+}
 
     // --- 3. Ensure Ansible + dependencies are installed ---
     stage('Install Ansible deps (idempotent)') {
