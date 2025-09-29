@@ -83,8 +83,6 @@
   become: true
 
 # --- UI assets for the interactive dashboard ---
-
-# Create template/static dirs BEFORE copying files
 - name: Ensure Flask template/static directories exist
   file:
     path: "{{ item }}"
@@ -95,31 +93,28 @@
     - /opt/system-monitor/static
   become: true
 
-# Copy Flask app (choose the final combined console+dashboard file)
-- name: Copy sql_console.py
+- name: Copy sql_console.py (Flask app)
   copy:
     src: sql_console.py
     dest: /opt/system-monitor/sql_console.py
     mode: '0755'
   become: true
 
-# Dashboard template (Jinja not required; plain HTML is fine)
 - name: Copy dashboard template
   copy:
-    src: templates/dashboard.html           # from roles/python_app/files/templates/dashboard.html
+    src: templates/dashboard.html
     dest: /opt/system-monitor/templates/dashboard.html
     mode: '0644'
   become: true
 
-# Client-side JS
 - name: Copy dashboard JS
   copy:
-    src: static/app.js                      # from roles/python_app/files/static/app.js
+    src: static/app.js
     dest: /opt/system-monitor/static/app.js
     mode: '0644'
   become: true
 
-# Systemd unit (expects EnvironmentFile=/opt/system-monitor/.env and ExecStart to use venv python)
+# --- Systemd units: web app + metrics agent timer (15s) ---
 - name: Install systemd unit for SQL console
   template:
     src: sql-console.service.j2
@@ -127,11 +122,45 @@
     mode: '0644'
   become: true
 
-# 8) Start / restart the service (single place)
-- name: Unmask, enable & restart sql-console
+# These two templates should encode OnUnitActiveSec=15s in the timer.
+- name: Install systemd unit for log-stats service
+  template:
+    src: log-stats.service.j2
+    dest: /etc/systemd/system/log-stats.service
+    mode: '0644'
+  become: true
+
+- name: Install systemd timer for log-stats (15s)
+  template:
+    src: log-stats.timer.j2
+    dest: /etc/systemd/system/log-stats.timer
+    mode: '0644'
+  become: true
+
+# 8) Reload/enable/start services
+- name: Reload systemd
+  command: systemctl daemon-reload
+  become: true
+
+- name: Enable & (re)start log-stats timer
+  systemd:
+    name: log-stats.timer
+    enabled: true
+    state: started
+  become: true
+
+- name: Unmask, enable & (re)start sql-console
   systemd:
     name: sql-console
     enabled: true
     state: restarted
-    daemon_reload: true
   become: true
+
+# ✅ Wait for the app port before Jenkins probes (uses ips.yml)
+- name: Wait for app port
+  wait_for:
+    host: "{{ ips.app_private_ip }}"
+    port: "{{ ips.app_port }}"
+    delay: 2
+    timeout: 30
+  become: false
