@@ -1,0 +1,10 @@
+[Unit]
+Description=Run log-stats every 15 seconds
+
+[Timer]
+OnUnitActiveSec=15s
+AccuracySec=1s
+Unit=log-stats.service
+
+[Install]
+WantedBy=timers.target
