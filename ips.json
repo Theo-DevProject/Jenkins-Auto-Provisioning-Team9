@@ -3,13 +3,15 @@
     "app_public_ip": "23.22.206.97",
     "app_private_ip": "172.31.16.135",
     "app_port": 8082,
-
+    
     "mysql_public_ip": "34.229.120.19",
     "mysql_private_ip": "172.31.25.138",
     "mysql_port": 3306,
 
     "jenkins_public_ip": "54.160.213.142",
     "jenkins_private_ip": "172.31.30.27",
-    "jenkins_port": 8080
+    "jenkins_port": 8080,
+
+    "sonarqube_host": "http://18.232.39.51:9000"
   }
 }
