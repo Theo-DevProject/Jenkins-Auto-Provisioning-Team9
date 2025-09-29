@@ -1,5 +1,13 @@
 ---
 # --- Play 1: DB host (idempotent network & service posture) ------------------
+- hosts: all
+  gather_facts: yes
+  vars_files:
+    - ips.json
+  roles:
+    - mysql_server
+    - python_app
+    
 - name: Deploy MySQL Database
   hosts: mysql_servers
   become: yes
