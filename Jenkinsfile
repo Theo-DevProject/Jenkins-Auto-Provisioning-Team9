@@ -8,35 +8,41 @@ pipeline {
     timeout(time: 30, unit: 'MINUTES')
   }
 
+  // (Optional) keep param, but it will be overwritten by ips.json
   parameters {
-    // Default to Elastic IP so public probe is preferred
-    string(
-      name: 'APP_URL',
-      defaultValue: 'http://3.223.42.1:8082',
-      description: 'Public URL for SQL console (Elastic IP)'
-    )
+    string(name: 'APP_URL', defaultValue: '', description: 'Will be set from ips.json if empty')
   }
 
   environment {
     INVENTORY = "inventory.ini"
     PLAYBOOK  = "deploy-complete-system.yml"
-
-    // Private URL (reachable from Jenkins over VPC)
-    APP_URL_PRIVATE = "http://172.31.16.135:8082"
-
-    // DB connection for the snapshot script
-    DB_HOST = "172.31.25.138"
-    DB_USER = "devops"
-    DB_PASS = "DevOpsPass456"
-    DB_NAME = "syslogs"
-
-    POINTS = "120"
+    POINTS    = "120"
+    // These will be set after we load ips.json:
+    // APP_URL
+    // APP_URL_PRIVATE
+    // DB_HOST
   }
 
   stages {
-
     stage('Checkout') {
       steps { checkout scm }
+    }
+
+    stage('Load IPs') {
+      steps {
+        script {
+          def ips = readJSON text: readFile('ips.json')
+          env.APP_URL         = "http://${ips.app_public_ip}:${ips.app_port}"
+          env.APP_URL_PRIVATE = "http://${ips.app_private_ip}:${ips.app_port}"
+          env.DB_HOST         = ips.db_private_ip
+          env.SONAR_HOST_URL  = ips.sonarqube_host   // informational (withSonarQubeEnv still drives auth)
+
+          echo "APP_URL: ${env.APP_URL}"
+          echo "APP_URL_PRIVATE: ${env.APP_URL_PRIVATE}"
+          echo "DB_HOST: ${env.DB_HOST}"
+          echo "SONAR: ${env.SONAR_HOST_URL}"
+        }
+      }
     }
 
     stage('Install Ansible deps (idempotent)') {
@@ -65,10 +71,11 @@ pipeline {
             : > logs/ansible.log
 
             export ANSIBLE_HOST_KEY_CHECKING=false
-            ansible --version
 
+            # Pass ips.json to Ansible (so roles can use it)
             ansible-playbook "${PLAYBOOK}" -i "${INVENTORY}" \
-              -e ansible_ssh_private_key_file="$SSH_KEY" | tee -a logs/ansible.log
+              -e ansible_ssh_private_key_file="$SSH_KEY" \
+              -e "@ips.json" | tee -a logs/ansible.log
 
             cp logs/ansible.log "logs/ansible-${BUILD_NUMBER}.log"
           '''
@@ -81,15 +88,11 @@ pipeline {
         sh '''
 /usr/bin/env bash <<'BASH'
 set -euo pipefail
-
-PUB_URL="${APP_URL:-}"                  # elastic IP by default (pipeline param)
-PRIV_URL="${APP_URL_PRIVATE}"
-
-# probe PUBLIC first, then PRIVATE as fallback
+PUB_URL="${APP_URL:-}"
+PRIV_URL="${APP_URL_PRIVATE:-}"
 URLS="$PUB_URL $PRIV_URL"
 
 echo "Probing (public then private): $URLS"
-
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY
 export no_proxy='*' NO_PROXY='*'
 
@@ -97,27 +100,14 @@ for url in $URLS; do
   [ -z "$url" ] && continue
   echo "Probing ${url} ..."
   host_port=${url#http://}; host=${host_port%:*}; port=${host_port##*:}
-
-  if timeout 5 bash -lc ":</dev/tcp/$host/$port"; then
-    echo "TCP $host:$port is reachable"
-  else
-    echo "TCP $host:$port is NOT reachable (timeout)"
-  fi
-
-  # up to 10 tries; fast-exit on HTTP 200
+  if timeout 5 bash -lc ":</dev/tcp/$host/$port"; then echo "TCP $host:$port is reachable"; fi
   for i in $(seq 1 10); do
-    code=$(curl -4 -sS -o /dev/null --connect-timeout 3 --max-time 5 \
-               --noproxy '*' --proxy '' -w '%{http_code}' "$url" || true)
+    code=$(curl -4 -sS -o /dev/null --connect-timeout 3 --max-time 5 --noproxy '*' --proxy '' -w '%{http_code}' "$url" || true)
     echo "Attempt $i/10 -> $url returned HTTP $code"
-    if [ "$code" = "200" ]; then
-      echo "OK on $url"
-      echo "$url" > .console_url
-      exit 0
-    fi
+    if [ "$code" = "200" ]; then echo "$url" > .console_url; exit 0; fi
     sleep 2
   done
 done
-
 echo "ERROR: SQL console not reachable from Jenkins."
 exit 1
 BASH
@@ -126,7 +116,7 @@ BASH
       post {
         success {
           script {
-            def consoleUrl = fileExists('.console_url') ? readFile('.console_url').trim() : params.APP_URL
+            def consoleUrl = fileExists('.console_url') ? readFile('.console_url').trim() : env.APP_URL
             echo "✅ Console URL in use: ${consoleUrl}"
             echo "🔒 Private fallback (VPC-only): ${env.APP_URL_PRIVATE}"
           }
@@ -142,19 +132,15 @@ BASH
           . .venv/bin/activate || true
           pip install --upgrade pip
           pip install pymysql matplotlib
-
           rm -rf artifacts && mkdir -p artifacts
-          DB_HOST="${DB_HOST}" DB_USER="${DB_USER}" DB_PASS="${DB_PASS}" \
-          DB_NAME="${DB_NAME}" POINTS="${POINTS}" \
+          DB_HOST="${DB_HOST}" DB_USER="devops" DB_PASS="DevOpsPass456" \
+          DB_NAME="syslogs" POINTS="${POINTS}" \
           python tools/snapshot.py
-
           cp artifacts/stats_snapshot.csv "artifacts/stats_snapshot_${BUILD_NUMBER}.csv" || true
           cp artifacts/stats_last_hour.png "artifacts/stats_last_${BUILD_NUMBER}.png" || true
         '''
       }
     }
-
-    /* ---------- SonarQube ---------- */
 
     stage('Setup SonarScanner (no Docker)') {
       steps {
@@ -168,66 +154,59 @@ BASH
       }
     }
 
-/* ---------------sonarqube scane ---------*/
-stage('SonarQube Scan') {
-  steps {
-    withSonarQubeEnv('SonarQube') {
-      script {
-        def scannerHome = tool 'sonar-scanner'
-        timeout(time: 25, unit: 'MINUTES') {
-          sh """#!/usr/bin/env bash
-            set -euo pipefail
-            echo "Using SonarQube at: \${SONAR_HOST_URL}"
-            echo "Scanner home: ${scannerHome}"
+    stage('SonarQube Scan') {
+      steps {
+        withSonarQubeEnv('SonarQube') {
+          script {
+            def scannerHome = tool 'sonar-scanner'
+            timeout(time: 25, unit: 'MINUTES') {
+              sh """#!/usr/bin/env bash
+                set -euo pipefail
+                echo "Using SonarQube at: \${SONAR_HOST_URL}"
+                echo "Scanner home: ${scannerHome}"
+                "${scannerHome}/bin/sonar-scanner" \
+                  -Dsonar.projectKey=team9-syslogs \
+                  -Dsonar.projectName=team9-syslogs \
+                  -Dsonar.sources=roles/python_app,tools \
+                  -Dsonar.inclusions=**/*.py,**/*.yml,**/*.yaml,**/*.j2 \
+                  -Dsonar.exclusions=**/.venv/**,**/venv/**,**/.scannerwork/**,**/.git/**,**/__pycache__/**,**/*.egg-info/**,**/.history/**,.history/** \
+                  -Dsonar.secrets.enabled=false \
+                  -Dsonar.scm.disabled=true \
+                  -Dsonar.scanner.skipSystemTruststore=true
+              """
+            }
+          }
+        }
+      }
+    }
 
-            "${scannerHome}/bin/sonar-scanner" \
-              -Dsonar.projectKey=team9-syslogs \
-              -Dsonar.projectName=team9-syslogs \
-              -Dsonar.sources=roles/python_app,tools \
-              -Dsonar.inclusions=**/*.py,**/*.yml,**/*.yaml,**/*.j2 \
-              -Dsonar.exclusions=**/.venv/**,**/venv/**,**/.scannerwork/**,**/.git/**,**/__pycache__/**,**/*.egg-info/**,**/.history/**,.history/** \
-              -Dsonar.python.coverage.reportPaths=coverage.xml \
-              -Dsonar.secrets.enabled=false \
-              -Dsonar.scm.disabled=true \
-              -Dsonar.scanner.skipSystemTruststore=true
-          """
+    stage('Quality Gate') {
+      steps {
+        timeout(time: 10, unit: 'MINUTES') {
+          script {
+            def qg = waitForQualityGate abortPipeline: false
+            echo "Quality Gate status: ${qg.status}"
+            // optionally: if (qg.status == 'ERROR') currentBuild.result = 'UNSTABLE'
+          }
+        }
+      }
+      post {
+        always {
+          script {
+            def url = ''
+            if (fileExists('.scannerwork/report-task.txt')) {
+              def rt = readFile '.scannerwork/report-task.txt'
+              url = (rt.readLines().find { it.startsWith('dashboardUrl=') } ?: '')
+                    .replace('dashboardUrl=','')
+            }
+            echo url ? "SonarQube dashboard: ${url}" :
+                       "Could not find dashboardUrl in report-task.txt"
+          }
+          archiveArtifacts artifacts: '.scannerwork/report-task.txt', allowEmptyArchive: true
         }
       }
     }
   }
-}
-// -------quality gate check --------*
-stage('Quality Gate') {
-  steps {
-    timeout(time: 10, unit: 'MINUTES') {
-      script {
-        // Non-blocking: do NOT abort the pipeline
-        def qg = waitForQualityGate abortPipeline: false
-        echo "Quality Gate status: ${qg.status}"  // OK / WARN / ERROR / NONE
-        // If you still want a soft fail marker, uncomment next line:
-        // if (qg.status == 'ERROR') currentBuild.result = 'UNSTABLE'
-      }
-    }
-  }
-  post {
-    always {
-      script {
-        def url = ''
-        if (fileExists('.scannerwork/report-task.txt')) {
-          def rt = readFile '.scannerwork/report-task.txt'
-          url = (rt.readLines().find { it.startsWith('dashboardUrl=') } ?: '')
-                .replace('dashboardUrl=','')
-        }
-        echo url ? "SonarQube dashboard: ${url}" :
-                   "Could not find dashboardUrl in report-task.txt"
-      }
-      archiveArtifacts artifacts: '.scannerwork/report-task.txt', allowEmptyArchive: true
-    }
-  }
-}
-// ----end stages -----
-    
-  } // stages
 
   post {
     always {
