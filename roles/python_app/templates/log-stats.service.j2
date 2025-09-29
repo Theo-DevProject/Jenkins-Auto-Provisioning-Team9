@@ -1,0 +1,7 @@
+[Unit]
+Description=System monitor metrics sampler (one-shot)
+
+[Service]
+Type=oneshot
+EnvironmentFile=/opt/system-monitor/.env
+ExecStart=/opt/system-monitor/venv/bin/python /opt/system-monitor/log_stats.py
